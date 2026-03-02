@@ -41,7 +41,7 @@ plt.rcParams.update({
     "figure.figsize"  : (12, 5),
     "axes.spines.top" : False,
     "axes.spines.right": False,
-    "axes.grid"       : True,
+    "axes.grid"       : True, 
     "grid.alpha"      : 0.3,
     "font.size"       : 11,
 })
@@ -56,6 +56,8 @@ COLORS   = {"AMZN": "#FF9900", "AAPL": "#555555", "GOOG": "#4285F4",
 DATA_PATH  = "data/"          # folder containing all LOBSTER CSV files from https://data.lobsterdata.com/info/DataSamples.php
 START_DATE = "2012-06-21"     # first date to load (YYYY-MM-DD)
 END_DATE   = "2012-06-21"     # last  date to load (YYYY-MM-DD)
+PLOTS_DIR  = "plots"          # all figures are saved here
+os.makedirs(PLOTS_DIR, exist_ok=True)
 
 
 # =============================================================================
@@ -459,9 +461,10 @@ def plot_lob_diagram():
         ax.text(0.5, 1.3 - 0.5*j, f"  {t}: {desc}", fontsize=9)
 
     plt.tight_layout()
-    plt.savefig("lob_diagram.png", dpi=120, bbox_inches="tight")
-    plt.show()
-    print("Saved: lob_diagram.png")
+    fname = os.path.join(PLOTS_DIR, "lob_diagram.png")
+    plt.savefig(fname, dpi=120, bbox_inches="tight")
+    plt.close()
+    print(f"Saved: {fname}")
 
 
 def plot_lob_snapshot(df, ticker, n_levels=5, title_extra=""):
@@ -496,9 +499,9 @@ def plot_lob_snapshot(df, ticker, n_levels=5, title_extra=""):
     ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{abs(int(x))}"))
 
     plt.tight_layout()
-    fname = f"lob_snapshot_{ticker}.png"
+    fname = os.path.join(PLOTS_DIR, f"lob_snapshot_{ticker}.png")
     plt.savefig(fname, dpi=120, bbox_inches="tight")
-    plt.show()
+    plt.close()
     print(f"Saved: {fname}")
 
 
@@ -537,9 +540,9 @@ def plot_midprice_and_spread(df, ticker):
     ax2.legend(fontsize=9)
 
     plt.tight_layout()
-    fname = f"midprice_spread_{ticker}.png"
+    fname = os.path.join(PLOTS_DIR, f"midprice_spread_{ticker}.png")
     plt.savefig(fname, dpi=120, bbox_inches="tight")
-    plt.show()
+    plt.close()
     print(f"Saved: {fname}")
 
 
@@ -566,9 +569,9 @@ def plot_event_breakdown(df, ticker):
     ax.legend(loc="upper right", fontsize=9)
     plt.xticks(rotation=0)
     plt.tight_layout()
-    fname = f"event_breakdown_{ticker}.png"
+    fname = os.path.join(PLOTS_DIR, f"event_breakdown_{ticker}.png")
     plt.savefig(fname, dpi=120, bbox_inches="tight")
-    plt.show()
+    plt.close()
     print(f"Saved: {fname}")
 
 
@@ -610,9 +613,9 @@ def plot_depth_heatmap(df, ticker, n_levels=5, n_bins=50):
     plt.colorbar(im2, ax=ax2, label="Avg volume")
 
     plt.tight_layout()
-    fname = f"depth_heatmap_{ticker}.png"
+    fname = os.path.join(PLOTS_DIR, f"depth_heatmap_{ticker}.png")
     plt.savefig(fname, dpi=120, bbox_inches="tight")
-    plt.show()
+    plt.close()
     print(f"Saved: {fname}")
 
 
@@ -659,9 +662,10 @@ def plot_cross_stock_summary(summaries):
                     f"{v:,.1f}", ha="center", va="bottom", fontsize=8)
 
     plt.tight_layout()
-    plt.savefig("cross_stock_summary.png", dpi=120, bbox_inches="tight")
-    plt.show()
-    print("Saved: cross_stock_summary.png")
+    fname = os.path.join(PLOTS_DIR, "cross_stock_summary.png")
+    plt.savefig(fname, dpi=120, bbox_inches="tight")
+    plt.close()
+    print(f"Saved: {fname}")
 
 
 # =============================================================================
@@ -721,9 +725,9 @@ def compute_stylised_facts(df, ticker):
     ax2.legend(fontsize=9)
 
     plt.tight_layout()
-    fname = f"stylised_facts_{ticker}.png"
+    fname = os.path.join(PLOTS_DIR, f"stylised_facts_{ticker}.png")
     plt.savefig(fname, dpi=120, bbox_inches="tight")
-    plt.show()
+    plt.close()
     print(f"Saved: {fname}")
 
 
@@ -970,9 +974,9 @@ def plot_hawkes_intensity(T, mu, alpha, beta, ticker, n_grid=2000):
                  fontweight="bold")
     ax.legend(fontsize=9)
     plt.tight_layout()
-    fname = f"hawkes_intensity_{ticker}.png"
+    fname = os.path.join(PLOTS_DIR, f"hawkes_intensity_{ticker}.png")
     plt.savefig(fname, dpi=120, bbox_inches="tight")
-    plt.show()
+    plt.close()
     print(f"Saved: {fname}")
 
 
@@ -1023,9 +1027,9 @@ def plot_residual_qqplot(T, mu, alpha, beta, ticker):
     ax2.legend(fontsize=9)
 
     plt.tight_layout()
-    fname = f"hawkes_qqplot_{ticker}.png"
+    fname = os.path.join(PLOTS_DIR, f"hawkes_qqplot_{ticker}.png")
     plt.savefig(fname, dpi=120, bbox_inches="tight")
-    plt.show()
+    plt.close()
     print(f"Saved: {fname}")
 
 
@@ -1143,9 +1147,10 @@ def run_pipeline(tickers=None, start=START_DATE, end=END_DATE, data_path=DATA_PA
                         ha="center", va="bottom", fontsize=8)
 
         plt.tight_layout()
-        plt.savefig("hawkes_comparison.png", dpi=120, bbox_inches="tight")
-        plt.show()
-        print("Saved: hawkes_comparison.png")
+        fname = os.path.join(PLOTS_DIR, "hawkes_comparison.png")
+        plt.savefig(fname, dpi=120, bbox_inches="tight")
+        plt.close()
+        print(f"Saved: {fname}")
 
     print("\n✓  Pipeline complete.")
     return summaries, hawkes_params
