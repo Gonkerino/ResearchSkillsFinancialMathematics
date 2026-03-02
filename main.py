@@ -47,7 +47,6 @@ plt.rcParams.update({
 })
 
 STOCKS   = ["AMZN", "AAPL", "GOOG", "MSFT", "INTC"]
-# STOCKS = ["AMZN"]
 COLORS   = {"AMZN": "#FF9900", "AAPL": "#555555", "GOOG": "#4285F4",
             "MSFT": "#00A4EF", "INTC": "#CC0000"}
 
