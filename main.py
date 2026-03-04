@@ -56,7 +56,9 @@ COLORS   = {"AMZN": "#FF9900", "AAPL": "#555555", "GOOG": "#4285F4",
 DATA_PATH  = "data/"          # folder containing all LOBSTER CSV files from https://data.lobsterdata.com/info/DataSamples.php
 START_DATE = "2012-06-21"     # first date to load (YYYY-MM-DD)
 END_DATE   = "2012-06-21"     # last  date to load (YYYY-MM-DD)
-PLOTS_DIR  = "plots"          # all figures are saved here
+
+# Save all figures to 'plots/main'
+PLOTS_DIR  = os.path.join("plots", "main")
 os.makedirs(PLOTS_DIR, exist_ok=True)
 
 

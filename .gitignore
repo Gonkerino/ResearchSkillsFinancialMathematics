@@ -2,3 +2,6 @@ data/*.csv
 !data/data.rar
 .DS_Store
 data/.DS_Store
+__pycache__/
+
+extended_hawkes.py
