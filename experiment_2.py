@@ -10,7 +10,7 @@
 #
 # Usage:
 #   python experiment_2.py
-# =============================================================================
+# ==============#===============================================================
 
 import os
 import sys
@@ -119,7 +119,7 @@ def plot_dual_intensity(T_buy, params_buy, T_sell, params_sell, ticker, n_grid=1
 
     plt.tight_layout()
     fname = os.path.join(PLOTS_DIR, f"exp2_dual_intensity_{ticker}.png")
-    plt.savefig(fname, dpi=120, bbox_inches="tight")
+    plt.savefig(fname, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"  Saved: {fname}")
 
@@ -165,7 +165,7 @@ def plot_parameter_comparison(params_buy, params_sell, ticker):
 
     plt.tight_layout()
     fname = os.path.join(PLOTS_DIR, f"exp2_param_comparison_{ticker}.png")
-    plt.savefig(fname, dpi=120, bbox_inches="tight")
+    plt.savefig(fname, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"  Saved: {fname}")
 
@@ -214,7 +214,7 @@ def plot_joint_qqplot(T_buy, params_buy, T_sell, params_sell, ticker):
 
     plt.tight_layout()
     fname = os.path.join(PLOTS_DIR, f"exp2_joint_qqplot_{ticker}.png")
-    plt.savefig(fname, dpi=120, bbox_inches="tight")
+    plt.savefig(fname, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"  Saved: {fname}")
 
@@ -260,7 +260,7 @@ def plot_intraday_rate(T_buy, T_sell, ticker, bin_secs=300):
 
     plt.tight_layout()
     fname = os.path.join(PLOTS_DIR, f"exp2_intraday_rate_{ticker}.png")
-    plt.savefig(fname, dpi=120, bbox_inches="tight")
+    plt.savefig(fname, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"  Saved: {fname}")
 
@@ -290,7 +290,7 @@ def plot_interarrival_hist(T_buy, T_sell, df, ticker):
     all_ia = np.concatenate([ia_b, ia_s])
     log_bins = np.logspace(np.log10(all_ia.min()), np.log10(all_ia.max()), 60)
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 4))
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 4.5))
     fig.suptitle(f"{ticker} — Stylised Facts", fontsize=13, fontweight="bold")
 
     ax1.hist(ia_b, bins=log_bins, density=True, color=BUY_COLOR, alpha=0.45,
@@ -313,7 +313,8 @@ def plot_interarrival_hist(T_buy, T_sell, df, ticker):
     ax1.set_ylabel("Density")
     ax1.set_title("Market-order Inter-arrival Times")
     ax1.legend(fontsize=9)
-    ax1.set_xlim(left=all_ia.min())
+    ax1.set_xlim(left=1e-6, right=5e2)
+    ax1.set_ylim(bottom=1e-5, top=1e4)
 
     # Signed-move autocorrelation panel (same structure as main.py stylised facts)
     mo = df[df["Type"] == 4].copy()
@@ -339,7 +340,7 @@ def plot_interarrival_hist(T_buy, T_sell, df, ticker):
 
     plt.tight_layout()
     fname = os.path.join(PLOTS_DIR, f"exp2_stylised_facts_{ticker}.png")
-    plt.savefig(fname, dpi=120, bbox_inches="tight")
+    plt.savefig(fname, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"  Saved: {fname}")
 
@@ -428,7 +429,7 @@ def plot_cross_stock_branching(all_results, tickers):
 
     plt.tight_layout()
     fname = os.path.join(PLOTS_DIR, "exp2_cross_stock_branching.png")
-    plt.savefig(fname, dpi=120, bbox_inches="tight")
+    plt.savefig(fname, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"\n  Saved: {fname}")
 

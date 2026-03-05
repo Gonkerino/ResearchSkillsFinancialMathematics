@@ -464,7 +464,7 @@ def plot_lob_diagram():
 
     plt.tight_layout()
     fname = os.path.join(PLOTS_DIR, "lob_diagram.png")
-    plt.savefig(fname, dpi=120, bbox_inches="tight")
+    plt.savefig(fname, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"Saved: {fname}")
 
@@ -502,7 +502,7 @@ def plot_lob_snapshot(df, ticker, n_levels=5, title_extra=""):
 
     plt.tight_layout()
     fname = os.path.join(PLOTS_DIR, f"lob_snapshot_{ticker}.png")
-    plt.savefig(fname, dpi=120, bbox_inches="tight")
+    plt.savefig(fname, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"Saved: {fname}")
 
@@ -543,7 +543,7 @@ def plot_midprice_and_spread(df, ticker):
 
     plt.tight_layout()
     fname = os.path.join(PLOTS_DIR, f"midprice_spread_{ticker}.png")
-    plt.savefig(fname, dpi=120, bbox_inches="tight")
+    plt.savefig(fname, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"Saved: {fname}")
 
@@ -572,7 +572,7 @@ def plot_event_breakdown(df, ticker):
     plt.xticks(rotation=0)
     plt.tight_layout()
     fname = os.path.join(PLOTS_DIR, f"event_breakdown_{ticker}.png")
-    plt.savefig(fname, dpi=120, bbox_inches="tight")
+    plt.savefig(fname, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"Saved: {fname}")
 
@@ -616,7 +616,7 @@ def plot_depth_heatmap(df, ticker, n_levels=5, n_bins=50):
 
     plt.tight_layout()
     fname = os.path.join(PLOTS_DIR, f"depth_heatmap_{ticker}.png")
-    plt.savefig(fname, dpi=120, bbox_inches="tight")
+    plt.savefig(fname, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"Saved: {fname}")
 
@@ -665,7 +665,7 @@ def plot_cross_stock_summary(summaries):
 
     plt.tight_layout()
     fname = os.path.join(PLOTS_DIR, "cross_stock_summary.png")
-    plt.savefig(fname, dpi=120, bbox_inches="tight")
+    plt.savefig(fname, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"Saved: {fname}")
 
@@ -690,7 +690,7 @@ def compute_stylised_facts(df, ticker):
     mo["SignedMove"] = mo["TradeDirection"] * mo["Size"]
     X = mo["SignedMove"].values
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 4))
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 9))
     fig.suptitle(f"{ticker} — Stylised Facts  ({df.Date.iloc[0]})",
                  fontsize=13, fontweight="bold")
 
@@ -709,7 +709,8 @@ def compute_stylised_facts(df, ticker):
     ax1.set_ylabel("Density")
     ax1.set_title("Market-order Inter-arrival Times")
     ax1.legend()
-    ax1.set_xlim(left=0)
+    ax1.set_xlim(left=1e-6, right=5e2)
+    ax1.set_ylim(bottom=1e-5, top=1e4)
 
     # ── Signed-move autocorrelation ───────────────────────────────────────
     max_lag = min(30, len(X) - 2)
@@ -728,7 +729,7 @@ def compute_stylised_facts(df, ticker):
 
     plt.tight_layout()
     fname = os.path.join(PLOTS_DIR, f"stylised_facts_{ticker}.png")
-    plt.savefig(fname, dpi=120, bbox_inches="tight")
+    plt.savefig(fname, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"Saved: {fname}")
 
@@ -977,7 +978,7 @@ def plot_hawkes_intensity(T, mu, alpha, beta, ticker, n_grid=2000):
     ax.legend(fontsize=9)
     plt.tight_layout()
     fname = os.path.join(PLOTS_DIR, f"hawkes_intensity_{ticker}.png")
-    plt.savefig(fname, dpi=120, bbox_inches="tight")
+    plt.savefig(fname, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"Saved: {fname}")
 
@@ -1030,7 +1031,7 @@ def plot_residual_qqplot(T, mu, alpha, beta, ticker):
 
     plt.tight_layout()
     fname = os.path.join(PLOTS_DIR, f"hawkes_qqplot_{ticker}.png")
-    plt.savefig(fname, dpi=120, bbox_inches="tight")
+    plt.savefig(fname, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"Saved: {fname}")
 
@@ -1150,7 +1151,7 @@ def run_pipeline(tickers=None, start=START_DATE, end=END_DATE, data_path=DATA_PA
 
         plt.tight_layout()
         fname = os.path.join(PLOTS_DIR, "hawkes_comparison.png")
-        plt.savefig(fname, dpi=120, bbox_inches="tight")
+        plt.savefig(fname, dpi=300, bbox_inches="tight")
         plt.close()
         print(f"Saved: {fname}")
 
