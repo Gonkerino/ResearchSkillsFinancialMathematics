@@ -1,6 +1,6 @@
 # =============================================================================
 # Compound Hawkes Processes for Limit Order Book Events
-# MSc Mini-Project Notebook
+# MSc Mini-Project Notebook aaa
 #
 # This notebook is self-contained. It walks you through:
 #   1. What a Limit Order Book (LOB) is and how to read LOBSTER data
