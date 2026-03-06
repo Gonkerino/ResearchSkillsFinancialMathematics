@@ -11,7 +11,7 @@ import warnings
 
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.stats import weibull_min, lognorm, gamma, expon
+from scipy.stats import weibull_min, lognorm, gamma, expon, invgauss, fisk, burr12, genpareto, gengamma
 
 from main import (
     Loader,
@@ -72,21 +72,41 @@ def compute_stylised_facts_multi_dist(df, ticker):
     a_g, _, scale_g = gamma.fit(inter_arrival, floc=0)
     s_l, _, scale_l = lognorm.fit(inter_arrival, floc=0)
     _, scale_e = expon.fit(inter_arrival, floc=0)
+    mu_ig, _, scale_ig = invgauss.fit(inter_arrival, floc=0)
+    c_fl, _, scale_fl = fisk.fit(inter_arrival, floc=0)
+    c_b, d_b, _, scale_b = burr12.fit(inter_arrival, floc=0)
+    c_gp, _, scale_gp = genpareto.fit(inter_arrival, floc=0)
+    a_gg, c_gg, _, scale_gg = gengamma.fit(inter_arrival, floc=0)
 
     xs = np.logspace(np.log10(ia_min), np.log10(ia_max), 400)
-    ys_weibull = weibull_min.pdf(xs, c=k, loc=0, scale=lam)
-    ys_gamma = gamma.pdf(xs, a=a_g, loc=0, scale=scale_g)
-    ys_lognorm = lognorm.pdf(xs, s=s_l, loc=0, scale=scale_l)
-    ys_exp = expon.pdf(xs, loc=0, scale=scale_e)
+    ys_weibull   = weibull_min.pdf(xs, c=k, loc=0, scale=lam)
+    ys_gamma     = gamma.pdf(xs, a=a_g, loc=0, scale=scale_g)
+    ys_lognorm   = lognorm.pdf(xs, s=s_l, loc=0, scale=scale_l)
+    ys_exp       = expon.pdf(xs, loc=0, scale=scale_e)
+    ys_invgauss  = invgauss.pdf(xs, mu=mu_ig, loc=0, scale=scale_ig)
+    ys_fisk      = fisk.pdf(xs, c=c_fl, loc=0, scale=scale_fl)
+    ys_burr12    = burr12.pdf(xs, c=c_b, d=d_b, loc=0, scale=scale_b)
+    ys_genpareto = genpareto.pdf(xs, c=c_gp, loc=0, scale=scale_gp)
+    ys_gengamma  = gengamma.pdf(xs, a=a_gg, c=c_gg, loc=0, scale=scale_gg)
 
-    ax1.plot(xs, ys_weibull, color="#d62728", ls="--", lw=2,
-             label=f"Weibull(k={k:.2f}, lambda={lam:.2f})")
-    ax1.plot(xs, ys_gamma, color="#9467bd", ls="-.", lw=1.8,
-             label=f"Gamma(a={a_g:.2f}, theta={scale_g:.2f})")
-    ax1.plot(xs, ys_lognorm, color="#2ca02c", ls=":", lw=2.2,
-             label=f"Lognormal(s={s_l:.2f}, scale={scale_l:.2f})")
-    ax1.plot(xs, ys_exp, color="#ff7f0e", ls="-", lw=1.8,
-             label=f"Exponential(lambda={1.0/scale_e:.2f})")
+    ax1.plot(xs, ys_weibull,   color="#d62728", ls="--",  lw=2.0,
+             label=f"Weibull(k={k:.2f}, λ={lam:.2f})")
+    ax1.plot(xs, ys_gamma,     color="#9467bd", ls="-.",  lw=1.8,
+             label=f"Gamma(a={a_g:.2f}, θ={scale_g:.2f})")
+    ax1.plot(xs, ys_lognorm,   color="#2ca02c", ls=":",   lw=2.2,
+             label=f"Lognormal(s={s_l:.2f}, sc={scale_l:.2f})")
+    ax1.plot(xs, ys_exp,       color="#ff7f0e", ls="-",   lw=1.8,
+             label=f"Exponential(λ={1.0/scale_e:.2f})")
+    ax1.plot(xs, ys_invgauss,  color="#1f77b4", ls="--",  lw=1.6,
+             label=f"InvGaussian(μ={mu_ig:.2f}, sc={scale_ig:.2f})")
+    ax1.plot(xs, ys_fisk,      color="#8c564b", ls="-.",  lw=1.6,
+             label=f"LogLogistic(c={c_fl:.2f}, sc={scale_fl:.2f})")
+    ax1.plot(xs, ys_burr12,    color="#e377c2", ls=":",   lw=1.8,
+             label=f"Burr12(c={c_b:.2f}, d={d_b:.2f})")
+    ax1.plot(xs, ys_genpareto, color="#7f7f7f", ls="-",   lw=1.6,
+             label=f"GenPareto(c={c_gp:.2f}, sc={scale_gp:.2f})")
+    ax1.plot(xs, ys_gengamma,  color="#bcbd22", ls="--",  lw=1.6,
+             label=f"GenGamma(a={a_gg:.2f}, c={c_gg:.2f})")
 
     ax1.set_xscale("log")
     ax1.set_yscale("log")
@@ -122,6 +142,30 @@ def compute_stylised_facts_multi_dist(df, ticker):
     plt.savefig(fname, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"Saved: {fname}")
+
+    # AIC = 2k - 2*log_likelihood  (k = number of free parameters, loc fixed => not counted)
+    ll_weibull   = weibull_min.logpdf(inter_arrival, c=k,    loc=0, scale=lam).sum()
+    ll_gamma     = gamma.logpdf(    inter_arrival, a=a_g,   loc=0, scale=scale_g).sum()
+    ll_lognorm   = lognorm.logpdf(  inter_arrival, s=s_l,   loc=0, scale=scale_l).sum()
+    ll_exp       = expon.logpdf(    inter_arrival,           loc=0, scale=scale_e).sum()
+    ll_invgauss  = invgauss.logpdf( inter_arrival, mu=mu_ig, loc=0, scale=scale_ig).sum()
+    ll_fisk      = fisk.logpdf(     inter_arrival, c=c_fl,  loc=0, scale=scale_fl).sum()
+    ll_burr12    = burr12.logpdf(   inter_arrival, c=c_b, d=d_b, loc=0, scale=scale_b).sum()
+    ll_genpareto = genpareto.logpdf(inter_arrival, c=c_gp,  loc=0, scale=scale_gp).sum()
+    ll_gengamma  = gengamma.logpdf( inter_arrival, a=a_gg, c=c_gg, loc=0, scale=scale_gg).sum()
+
+    aic = {
+        "Weibull":     2 * 2 - 2 * ll_weibull,
+        "Gamma":       2 * 2 - 2 * ll_gamma,
+        "Lognormal":   2 * 2 - 2 * ll_lognorm,
+        "Exponential": 2 * 1 - 2 * ll_exp,
+        "InvGaussian": 2 * 2 - 2 * ll_invgauss,
+        "LogLogistic": 2 * 2 - 2 * ll_fisk,
+        "Burr12":      2 * 3 - 2 * ll_burr12,
+        "GenPareto":   2 * 2 - 2 * ll_genpareto,
+        "GenGamma":    2 * 3 - 2 * ll_gengamma,
+    }
+
     return {
         "ticker": ticker,
         "inter_arrival": inter_arrival,
@@ -130,6 +174,7 @@ def compute_stylised_facts_multi_dist(df, ticker):
         "gamma_scale": float(scale_g),
         "exp_scale": float(scale_e),
         "date": str(df.Date.iloc[0]),
+        "aic": aic,
     }
 
 
@@ -194,6 +239,121 @@ def plot_cross_ticker_stylised_comparison(results):
     print(f"Saved: {fname}")
 
 
+def plot_aic_comparison(results):
+    """Grouped bar chart of ΔAIC across tickers and a console summary table."""
+    if not results:
+        return
+
+    dist_names = ["Weibull", "Gamma", "Lognormal", "Exponential",
+                  "InvGaussian", "LogLogistic", "Burr12", "GenPareto", "GenGamma"]
+    tickers = list(results.keys())
+
+    # Build ΔAIC matrix: rows = tickers, cols = distributions
+    delta_aic = {}
+    raw_aic = {}
+    winners = {}
+    for ticker, res in results.items():
+        if "aic" not in res:
+            continue
+        aic_row = res["aic"]
+        best = min(aic_row.values())
+        winners[ticker] = min(aic_row, key=aic_row.get)
+        raw_aic[ticker] = aic_row
+        delta_aic[ticker] = {d: aic_row[d] - best for d in dist_names}
+
+    if not delta_aic:
+        print("  No AIC data to plot.")
+        return
+
+    # ---- Console summary table ----
+    col_w = 14
+    header = f"{'Ticker':<8}" + "".join(f"{d:>{col_w}}" for d in dist_names)
+    header += f"{'ΔAIC winner':>{col_w}}{'Best dist':>{col_w}}"
+    print("\n" + "=" * len(header))
+    print("AIC Comparison Summary")
+    print("=" * len(header))
+    print(header)
+    print("-" * len(header))
+    for ticker in tickers:
+        if ticker not in raw_aic:
+            continue
+        row = f"{ticker:<8}"
+        for d in dist_names:
+            row += f"{raw_aic[ticker][d]:>{col_w}.1f}"
+        best_d = winners[ticker]
+        row += f"{0.0:>{col_w}.1f}{best_d:>{col_w}}"
+        print(row)
+    print("=" * len(header))
+
+    # Also print ΔAIC rows
+    print("\nΔAIC (raw AIC − best AIC for that ticker):")
+    print("-" * len(header))
+    header2 = f"{'Ticker':<8}" + "".join(f"{d:>{col_w}}" for d in dist_names)
+    print(header2)
+    print("-" * len(header))
+    for ticker in tickers:
+        if ticker not in delta_aic:
+            continue
+        row = f"{ticker:<8}"
+        for d in dist_names:
+            row += f"{delta_aic[ticker][d]:>{col_w}.1f}"
+        print(row)
+    print("=" * len(header))
+
+    # ---- Grouped bar chart ----
+    n_tickers = len([t for t in tickers if t in delta_aic])
+    n_dists = len(dist_names)
+    x = np.arange(n_tickers)
+    bar_w = 0.09
+    offsets = np.linspace(-(n_dists - 1) / 2, (n_dists - 1) / 2, n_dists) * bar_w
+
+    dist_colors = {
+        "Weibull":     "#d62728",
+        "Gamma":       "#9467bd",
+        "Lognormal":   "#2ca02c",
+        "Exponential": "#ff7f0e",
+        "InvGaussian": "#1f77b4",
+        "LogLogistic": "#8c564b",
+        "Burr12":      "#e377c2",
+        "GenPareto":   "#7f7f7f",
+        "GenGamma":    "#bcbd22",
+    }
+
+    _, ax = plt.subplots(figsize=(max(12, 3 * n_tickers), 5))
+
+    valid_tickers = [t for t in tickers if t in delta_aic]
+    for i, dist in enumerate(dist_names):
+        vals = [delta_aic[t][dist] for t in valid_tickers]
+        # shift zeros to a small positive value so log scale works
+        vals_plot = [max(v, 1e-2) for v in vals]
+        ax.bar(x + offsets[i], vals_plot, width=bar_w,
+                      label=dist, color=dist_colors[dist], alpha=0.85,
+                      edgecolor="white")
+
+    # Use log scale if the range is large
+    max_delta = max(
+        delta_aic[t][d] for t in valid_tickers for d in dist_names
+    )
+    if max_delta > 100:
+        ax.set_yscale("log")
+        ax.set_ylabel("ΔAIC (log scale)")
+    else:
+        ax.set_ylabel("ΔAIC")
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(valid_tickers)
+    ax.set_xlabel("Ticker")
+    ax.set_title("AIC Model Comparison — ΔAIC per Ticker\n(winner at zero; lower is better)")
+    ax.legend(title="Distribution", fontsize=9)
+    ax.axhline(0, color="black", lw=0.8, ls="--")
+
+    plt.tight_layout()
+    fname = os.path.join(PLOTS_DIR, "aic_comparison.png")
+    plt.savefig(fname, dpi=300, bbox_inches="tight")
+    plt.close()
+    print(f"\nSaved: {fname}")
+
+
 def run_stylised_facts_multi_dist(tickers=None, start=START_DATE, end=END_DATE,
                                data_path=DATA_PATH):
     """Run Weibull stylised-facts plots for each requested ticker."""
@@ -222,6 +382,7 @@ def run_stylised_facts_multi_dist(tickers=None, start=START_DATE, end=END_DATE,
             comparison_results[ticker] = res
 
     plot_cross_ticker_stylised_comparison(comparison_results)
+    plot_aic_comparison(comparison_results)
 
     print(f"\nDone. Weibull stylised plots are in: {os.path.abspath(PLOTS_DIR)}")
 
