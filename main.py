@@ -28,6 +28,33 @@ warnings.filterwarnings("ignore")
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+# =============================================================================
+# AUTO-SAVE ALL MATPLOTLIB FIGURES
+# =============================================================================
+import os
+from datetime import datetime
+
+PLOT_DIR = "plots"
+os.makedirs(PLOT_DIR, exist_ok=True)
+
+# store original show
+_original_show = plt.show
+
+def _autosave_show(*args, **kwargs):
+    """
+    Automatically save every matplotlib figure before showing it.
+    """
+    figs = list(map(plt.figure, plt.get_fignums()))
+
+    for i, fig in enumerate(figs):
+        timestamp = datetime.now().strftime("%H%M%S_%f")
+        filename = f"{PLOT_DIR}/plot_{timestamp}_{i}.png"
+        fig.savefig(filename, dpi=140, bbox_inches="tight")
+
+    _original_show(*args, **kwargs)
+
+# monkey-patch matplotlib show()
+plt.show = _autosave_show
 import matplotlib.gridspec as gridspec
 import matplotlib.ticker as mticker
 from matplotlib.patches import FancyArrowPatch
@@ -663,7 +690,159 @@ def plot_cross_stock_summary(summaries):
     plt.show()
     print("Saved: cross_stock_summary.png")
 
+# =============================================================================
+# EXTRA PLOTS — Multivariate Hawkes diagnostics (Intensity + Branching heatmap)
+# =============================================================================
 
+def _mv_intensity_on_grid(times_list, mu, alpha, beta, t_grid):
+    """
+    Compute multivariate Hawkes intensity λ_i(t) on a time grid for all i.
+
+    Model:
+      λ_i(t) = μ_i + sum_j sum_{t_k^(j) < t} α_{j,i} exp(-β_{j,i}(t - t_k^(j)))
+
+    alpha[source, target], beta[source, target]
+    Returns: lam_grid shape (len(t_grid), d)
+    """
+    d = len(times_list)
+    t_grid = np.asarray(t_grid, dtype=float)
+    lam = np.zeros((len(t_grid), d), dtype=float)
+
+    # Prepare per-dimension sorted times
+    ts = []
+    for arr in times_list:
+        a = np.asarray(arr, dtype=float)
+        a = a[np.isfinite(a)]
+        a = np.sort(a)
+        ts.append(a)
+
+    # Merge events into one stream (time, source_dim)
+    t_all, k_all = _mv_stack_events(ts)
+    if len(t_all) == 0:
+        # no events -> constant intensities
+        lam[:] = mu.reshape(1, -1)
+        return lam
+
+    # Shift everything so grid starts at 0 for stability
+    t0 = min(t_all[0], t_grid[0])
+    t_all = t_all - t0
+    t_grid0 = t_grid - t0
+
+    # Recursion state R[source, target]
+    R = np.zeros((d, d), dtype=float)
+    last_t = 0.0
+    e_idx = 0
+
+    for g_idx, t in enumerate(t_grid0):
+        # advance events up to this grid time
+        while e_idx < len(t_all) and t_all[e_idx] <= t:
+            te = t_all[e_idx]
+            dt = te - last_t
+            if dt < 0:
+                dt = 0.0
+            R *= np.exp(-beta * dt)
+            src = k_all[e_idx]
+            R[src, :] += 1.0
+            last_t = te
+            e_idx += 1
+
+        # decay from last event time to current grid time
+        dtg = t - last_t
+        if dtg < 0:
+            dtg = 0.0
+        Rg = R * np.exp(-beta * dtg)
+
+        # intensity for each target i
+        # λ_i = μ_i + Σ_source α[source,i] * Rg[source,i]
+        lam[g_idx, :] = mu + np.sum(alpha * Rg, axis=0)
+
+    return lam
+
+
+def plot_mv_hawkes_intensity(times_list, fit_result, label="", dim_names=None, n_grid=1500):
+    """
+    Plot λ_i(t) over time for each dimension i, plus event rugs.
+    One figure per dimension (cleaner than overlaying all).
+    """
+    if fit_result is None:
+        return
+    mu = fit_result["mu"]
+    alpha = fit_result["alpha"]
+    beta = fit_result["beta"]
+
+    d = len(times_list)
+    if dim_names is None:
+        dim_names = [f"dim{i}" for i in range(d)]
+
+    # Build a plotting grid covering the observed window
+    # Use global min/max across all dims
+    all_times = []
+    for arr in times_list:
+        a = np.asarray(arr, dtype=float)
+        a = a[np.isfinite(a)]
+        if len(a):
+            all_times.append(a)
+    if not all_times:
+        return
+    tmin = float(np.min([np.min(a) for a in all_times]))
+    tmax = float(np.max([np.max(a) for a in all_times]))
+    if tmax <= tmin:
+        return
+
+    t_grid = np.linspace(tmin, tmax, int(n_grid))
+    lam_grid = _mv_intensity_on_grid(times_list, mu, alpha, beta, t_grid)
+
+    # One figure per dimension
+    for i in range(d):
+        fig, ax = plt.subplots(figsize=(10, 3))
+        ax.plot(t_grid, lam_grid[:, i])
+        ax.set_title(f"Multivariate Hawkes intensity — {label} — {dim_names[i]}")
+        ax.set_xlabel("Time (seconds)")
+        ax.set_ylabel(r"$\lambda_i(t)$")
+        ax.grid(True, alpha=0.3)
+
+        # Rug plot for events of this dimension
+        ti = np.asarray(times_list[i], dtype=float)
+        ti = ti[np.isfinite(ti)]
+        if len(ti):
+            # draw short vertical lines at y=0 up to a small fraction of max intensity
+            y0 = 0.0
+            y1 = 0.08 * float(np.nanmax(lam_grid[:, i]) if np.isfinite(np.nanmax(lam_grid[:, i])) else 1.0)
+            ax.vlines(ti, y0, y1, linewidth=0.5)
+
+        plt.tight_layout()
+        plt.show()
+
+
+def plot_branching_heatmap(A, dim_names=None, title="Branching matrix heatmap"):
+    """
+    Heatmap of branching matrix A where A[target, source] = alpha[source,target]/beta[source,target].
+    """
+    A = np.asarray(A, dtype=float)
+    d = A.shape[0]
+    if dim_names is None:
+        dim_names = [f"dim{i}" for i in range(d)]
+
+    fig, ax = plt.subplots(figsize=(5.5, 4.5))
+    im = ax.imshow(A, aspect="equal")  # use default colormap
+    ax.set_title(title)
+    ax.set_xlabel("Source (j)")
+    ax.set_ylabel("Target (i)")
+
+    ax.set_xticks(range(d))
+    ax.set_yticks(range(d))
+    ax.set_xticklabels(dim_names, rotation=45, ha="right")
+    ax.set_yticklabels(dim_names)
+
+    # annotate numbers
+    for i in range(d):
+        for j in range(d):
+            ax.text(j, i, f"{A[i, j]:.3f}", ha="center", va="center", fontsize=9)
+
+    plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    plt.tight_layout()
+    plt.show()
+    
 # =============================================================================
 # SECTION 3 — STYLISED FACTS
 # =============================================================================
@@ -936,7 +1115,7 @@ def fit_hawkes(T, label=""):
     print(f"  β (decay rate)    = {beta:.5f}")
     print(f"  Branching ratio   = {br:.4f}")
     if br >= 1:
-        print("  ⚠  Branching ratio ≥ 1 → non-stationary; check data quality.")
+        print("Branching ratio ≥ 1 → non-stationary; check data quality.")
     else:
         print(f"  → ~{br*100:.1f}% of events are triggered by previous events.")
     print(f"{'─'*50}\n")
@@ -1028,6 +1207,321 @@ def plot_residual_qqplot(T, mu, alpha, beta, ticker):
     plt.show()
     print(f"Saved: {fname}")
 
+# =============================================================================
+# SECTION 5B — MULTIVARIATE HAWKES (2D / 4D, exponential kernels)
+# =============================================================================
+"""
+Multivariate Hawkes with exponential kernels:
+
+For i in {0..d-1}:
+  λ_i(t) = μ_i + Σ_j Σ_{t_k^(j) < t} α_{j,i} exp(-β_{j,i} (t - t_k^(j)))
+
+Parameterization in code:
+  alpha[source, target] = α_{source,target}
+  beta[source, target]  = β_{source,target}
+
+Branching matrix A:
+  A[target, source] = α_{source,target} / β_{source,target}
+
+Stability (stationarity): spectral radius ρ(A) < 1
+"""
+
+def _mv_stack_events(times_list):
+    """Merge event times from each dimension into one sorted stream."""
+    all_t = []
+    all_k = []
+    for k, arr in enumerate(times_list):
+        if arr is None:
+            continue
+        a = np.asarray(arr, dtype=float)
+        a = a[np.isfinite(a)]
+        for t in a:
+            all_t.append(float(t))
+            all_k.append(int(k))
+    if len(all_t) == 0:
+        return np.array([]), np.array([], dtype=int)
+    idx = np.argsort(all_t)
+    return np.asarray(all_t)[idx], np.asarray(all_k, dtype=int)[idx]
+
+
+def _branching_matrix(alpha, beta):
+    """
+    Return branching matrix A where A[target, source] = alpha[source,target]/beta[source,target]
+    """
+    d = alpha.shape[0]
+    A = np.zeros((d, d), dtype=float)
+    for source in range(d):
+        for target in range(d):
+            A[target, source] = alpha[source, target] / beta[source, target]
+    return A
+
+
+def _spectral_radius(M):
+    vals = np.linalg.eigvals(M)
+    return float(np.max(np.abs(vals)))
+
+
+def mv_hawkes_negloglik(params, times_list, d, stability_rho_max=0.99):
+    """
+    Negative log-likelihood for d-dim Hawkes with exp kernels.
+
+    Param layout:
+      params = [mu_0..mu_{d-1},
+                alpha_{0,0}..alpha_{d-1,d-1} (row-major: source-major),
+                beta_{0,0}..beta_{d-1,d-1}  (row-major)]
+      alpha[source, target], beta[source, target]
+    """
+    params = np.asarray(params, dtype=float)
+    mu = params[:d]
+    alpha_flat = params[d:d + d*d]
+    beta_flat  = params[d + d*d:]
+    alpha = alpha_flat.reshape((d, d))
+    beta  = beta_flat.reshape((d, d))
+
+    # constraints
+    if np.any(mu <= 0) or np.any(alpha < 0) or np.any(beta <= 0):
+        return np.inf
+
+    # stability penalty
+    A = _branching_matrix(alpha, beta)
+    rho = _spectral_radius(A)
+    if not np.isfinite(rho) or rho >= stability_rho_max:
+        return np.inf
+
+    # stack events and shift to start at 0
+    t_all, k_all = _mv_stack_events(times_list)
+    if len(t_all) < 30:
+        return np.inf
+
+    t0 = t_all[0]
+    t_all = t_all - t0
+    T_end = t_all[-1]
+
+    # shift per-dimension times for compensator
+    shifted = []
+    for arr in times_list:
+        a = np.asarray(arr, dtype=float)
+        a = a[np.isfinite(a)]
+        a = np.sort(a)
+        shifted.append(a - t0 if len(a) else np.array([]))
+
+    # recursion state R[source, target]
+    R = np.zeros((d, d), dtype=float)
+    last_t = 0.0
+    ll = 0.0
+
+    for t, k in zip(t_all, k_all):
+        dt = t - last_t
+        if dt < 0:
+            return np.inf
+
+        # decay all R by dt (pairwise beta)
+        R *= np.exp(-beta * dt)
+
+        # intensity for target dimension k
+        lam_k = mu[k] + np.sum(alpha[:, k] * R[:, k])
+        if lam_k <= 0 or not np.isfinite(lam_k):
+            return np.inf
+        ll += np.log(lam_k)
+
+        # after event happens: source=k adds 1 to R[k, target] for all targets
+        R[k, :] += 1.0
+        last_t = t
+
+    # compensator (closed form)
+    # ∫0^T λ_i(t) dt = μ_i T + Σ_j (α_{j,i}/β_{j,i}) Σ_{t_k^(j)} [1 - exp(-β_{j,i}(T - t_k^(j)))]
+    comp = float(np.sum(mu) * T_end)
+    for source in range(d):
+        tj = shifted[source]
+        if len(tj) == 0:
+            continue
+        delta = (T_end - tj)
+        for target in range(d):
+            b = beta[source, target]
+            comp += (alpha[source, target] / b) * np.sum(1.0 - np.exp(-b * delta))
+
+    return -(ll - comp)
+
+
+def mv_hawkes_negloglik_and_grad(params, times_list, d, stability_rho_max=0.99):
+    """
+    Negative log-likelihood + numerical gradient (finite differences).
+    Robust and easy to maintain for 2D/4D.
+
+    Returns (nll, grad)
+    """
+    params = np.asarray(params, dtype=float)
+    base = mv_hawkes_negloglik(params, times_list, d, stability_rho_max=stability_rho_max)
+
+    grad = np.zeros_like(params)
+    if not np.isfinite(base):
+        return np.inf, grad
+
+    eps = 1e-5
+    for i in range(len(params)):
+        p2 = params.copy()
+        p2[i] += eps
+        v2 = mv_hawkes_negloglik(p2, times_list, d, stability_rho_max=stability_rho_max)
+        grad[i] = (v2 - base) / eps
+
+    return base, grad
+
+
+def _mv_make_inits(times_list, d, n_starts=6):
+    """Heuristic multi-start inits for mv Hawkes."""
+    t_all, _ = _mv_stack_events(times_list)
+    t_all = np.sort(t_all[np.isfinite(t_all)])
+    if len(t_all) < 30:
+        return []
+    T_end = t_all[-1] - t_all[0]
+    T_end = max(T_end, 1e-6)
+
+    # per-dim observed rates
+    rates = []
+    for arr in times_list:
+        a = np.asarray(arr, dtype=float)
+        a = a[np.isfinite(a)]
+        rates.append(len(a) / T_end)
+    rates = np.asarray(rates, dtype=float)
+    rates = np.maximum(rates, 1e-4)
+
+    # global beta scale from mean inter-arrival
+    ia = np.diff(t_all)
+    ia = ia[ia > 0]
+    beta0 = 1.0 / (np.mean(ia) if len(ia) else 1.0)
+    beta0 = float(np.clip(beta0, 0.1, 50.0))
+
+    inits = []
+    for s in np.linspace(0.2, 0.9, n_starts):
+        mu0 = rates * s
+        # modest excitation so stability likely holds
+        alpha0 = np.full((d, d), 0.12 * beta0 * s, dtype=float)
+        beta0m = np.full((d, d), beta0 * (0.7 + 0.6*s), dtype=float)
+        p = np.concatenate([mu0, alpha0.reshape(-1), beta0m.reshape(-1)])
+        inits.append(p)
+    return inits
+
+
+def fit_mv_hawkes(times_list, label="", dim_names=None, stability_rho_max=0.99, n_starts=6, verbose=True):
+    """
+    Fit a d-dimensional Hawkes (exp kernels) by MLE with stability penalty.
+
+    Returns dict with keys:
+      mu, alpha, beta, A (branching matrix), rho, success
+    """
+    d = len(times_list)
+    if dim_names is None:
+        dim_names = [f"dim{i}" for i in range(d)]
+
+    # count events
+    n_total = 0
+    for x in times_list:
+        a = np.asarray(x, dtype=float) if x is not None else np.array([])
+        a = a[np.isfinite(a)]
+        n_total += len(a)
+
+    if n_total < 30:
+        if verbose:
+            print(f"  ⚠  Not enough events for multivariate Hawkes ({label}). total={n_total}")
+        return None
+
+    # bounds: mu>0, alpha>=0, beta>0
+    bounds = []
+    bounds += [(1e-8, None)] * d          # mu
+    bounds += [(0.0, None)] * (d*d)       # alpha
+    bounds += [(1e-6, None)] * (d*d)      # beta
+
+    best = None
+    best_val = np.inf
+
+    inits = _mv_make_inits(times_list, d, n_starts=n_starts)
+    if not inits:
+        if verbose:
+            print(f"  ⚠  Could not create initial points ({label}).")
+        return None
+
+    obj = lambda p: mv_hawkes_negloglik_and_grad(p, times_list, d, stability_rho_max=stability_rho_max)
+
+    for x0 in inits:
+        res = minimize(fun=lambda p: obj(p)[0],
+                       x0=x0,
+                       method="L-BFGS-B",
+                       jac=lambda p: obj(p)[1],
+                       bounds=bounds,
+                       options={"maxiter": 400})
+        if res.success and np.isfinite(res.fun) and res.fun < best_val:
+            best_val = float(res.fun)
+            best = res
+
+    if best is None:
+        if verbose:
+            print(f"  ✗ Multivariate Hawkes failed ({label}).")
+        return None
+
+    p = best.x
+    mu = p[:d]
+    alpha = p[d:d+d*d].reshape((d, d))
+    beta  = p[d+d*d:].reshape((d, d))
+    A = _branching_matrix(alpha, beta)
+    rho = _spectral_radius(A)
+
+    if verbose:
+        print(f"\n  ✓ Multivariate Hawkes fit: {label}")
+        print(f"    dims: {dim_names}")
+        print("    μ: " + ", ".join([f"{dim_names[i]}={mu[i]:.4g}" for i in range(d)]))
+        print(f"    spectral radius ρ(A) = {rho:.4f}  (stability requires < 1)")
+        print("    Branching matrix A (rows=target, cols=source):")
+        header = "           " + " ".join([f"{n:>10s}" for n in dim_names])
+        print("    " + header)
+        for i in range(d):
+            row = " ".join([f"{A[i,j]:10.4f}" for j in range(d)])
+            print(f"    {dim_names[i]:>10s} {row}")
+
+    return {"mu": mu, "alpha": alpha, "beta": beta, "A": A, "rho": rho, "success": best.success}
+
+
+def extract_up_down_midprice_times(df):
+    """
+    Up/Down mid-price move event times from best bid/ask.
+    Robust to different LOBSTER column naming conventions.
+
+    Returns:
+      up_t, dn_t  (sorted numpy arrays of event times)
+    """
+    # Common variants
+    ask_candidates = ["AskPrice1", "Ask Price 1", "ask_price_1", "AskPrice_1", "ASKPRICE1"]
+    bid_candidates = ["BidPrice1", "Bid Price 1", "bid_price_1", "BidPrice_1", "BIDPRICE1"]
+
+    def _pick(cands):
+        for c in cands:
+            if c in df.columns:
+                return c
+        # case-insensitive fallback
+        lower_map = {c.lower(): c for c in df.columns}
+        for c in cands:
+            if c.lower() in lower_map:
+                return lower_map[c.lower()]
+        return None
+
+    ask_col = _pick(ask_candidates)
+    bid_col = _pick(bid_candidates)
+
+    if ask_col is None or bid_col is None:
+        preview = list(df.columns[:40])
+        raise KeyError(
+            f"Cannot find best bid/ask columns. "
+            f"Tried ask={ask_candidates}, bid={bid_candidates}. "
+            f"First columns: {preview}"
+        )
+
+    mid = (df[ask_col].values.astype(float) + df[bid_col].values.astype(float)) / 2.0
+    dmid = np.diff(mid, prepend=mid[0])
+
+    t = df["Time"].values.astype(float)
+    up_t = np.sort(t[dmid > 0])
+    dn_t = np.sort(t[dmid < 0])
+
+    return up_t, dn_t
 
 # =============================================================================
 # SECTION 6 — MAIN PIPELINE
@@ -1036,14 +1530,19 @@ def plot_residual_qqplot(T, mu, alpha, beta, ticker):
 def run_pipeline(tickers=None, start=START_DATE, end=END_DATE, data_path=DATA_PATH):
     """
     End-to-end pipeline: load → visualise LOB → stylised facts → Hawkes fit.
-
-    Parameters
-    ----------
-    tickers   : list of str   Ticker symbols (default: STOCKS = the 5 stocks)
-    start     : str            "YYYY-MM-DD"
-    end       : str            "YYYY-MM-DD"
-    data_path : str            Folder with LOBSTER files
+    Also saves ALL plots (including new 2D/4D Hawkes plots) to ./plots
     """
+    import os
+
+    PLOT_DIR = "plots"
+    os.makedirs(PLOT_DIR, exist_ok=True)
+
+    def _save_current_fig(filename):
+        """Save the current active matplotlib figure into plots/ and close it."""
+        path = os.path.join(PLOT_DIR, filename)
+        plt.savefig(path, dpi=140, bbox_inches="tight")
+        plt.close()
+
     if tickers is None:
         tickers = STOCKS
 
@@ -1052,6 +1551,9 @@ def run_pipeline(tickers=None, start=START_DATE, end=END_DATE, data_path=DATA_PA
     print("  STEP 0 — LOB Structure Diagram")
     print("="*65)
     plot_lob_diagram()
+    # if plot_lob_diagram() already saves internally, this will create a duplicate save only if it leaves a figure open
+    if plt.get_fignums():
+        _save_current_fig("lob_diagram_extra.png")
 
     # ── 2.1  Per-stock loading and LOB plots ────────────────────────────────
     summaries = {}
@@ -1070,44 +1572,188 @@ def run_pipeline(tickers=None, start=START_DATE, end=END_DATE, data_path=DATA_PA
             continue
 
         df = daily[0]
-        t_open_buffer  = df["Time"].min() + 3600   # drop first hour
-        t_close_buffer = df["Time"].max() - 3600   # drop last  hour
-        df = df[(df["Time"] >= t_open_buffer) & (df["Time"] <= t_close_buffer)].copy()
-        summaries[ticker] = df
 
-        print(f"\n  ── LOB Snapshot ({ticker}) ──")
-        plot_lob_snapshot(df, ticker, n_levels=5, title_extra=df.Date.iloc[0])
+        # ── Visualisations ────────────────────────────────────────────────
+        plot_lob_snapshot(df, ticker)
+        if plt.get_fignums():
+            _save_current_fig(f"lob_snapshot_{ticker}_extra.png")
 
-        print(f"\n  ── Mid-price & Spread ({ticker}) ──")
         plot_midprice_and_spread(df, ticker)
+        if plt.get_fignums():
+            _save_current_fig(f"midprice_spread_{ticker}_extra.png")
 
-        print(f"\n  ── Event Breakdown ({ticker}) ──")
         plot_event_breakdown(df, ticker)
+        if plt.get_fignums():
+            _save_current_fig(f"event_breakdown_{ticker}_extra.png")
 
-        print(f"\n  ── Depth Heatmap ({ticker}) ──")
-        plot_depth_heatmap(df, ticker, n_levels=5)
+        plot_depth_heatmap(df, ticker)
+        if plt.get_fignums():
+            _save_current_fig(f"depth_heatmap_{ticker}_extra.png")
 
-        print(f"\n  ── Stylised Facts ({ticker}) ──")
+        # ── Stylised facts on market orders ───────────────────────────────
         compute_stylised_facts(df, ticker)
+        # stylised facts might generate multiple figures; save them all
+        for i, fnum in enumerate(list(plt.get_fignums())):
+            plt.figure(fnum)
+            _save_current_fig(f"stylised_{ticker}_{i}.png")
 
-        print(f"\n  ── VAR Memory Test ({ticker}) ──")
-        var_memory_test(df, ticker)
+        # ── VAR memory test (counts binned) ────────────────────────────────
+        var_memory_test(df, ticker, bin_length=1.0, max_lags=10)
+        for i, fnum in enumerate(list(plt.get_fignums())):
+            plt.figure(fnum)
+            _save_current_fig(f"var_test_{ticker}_{i}.png")
 
-        # ── Hawkes fit on market-order timestamps ─────────────────────────
-        mo   = df[df["Type"] == 4]
-        T    = mo["Time"].values
-        T    = np.sort(T[np.isfinite(T)])
+              # ── Summary stats for cross-stock comparison ───────────────────────
+        def _pick_col(cands):
+            for c in cands:
+                if c in df.columns:
+                    return c
+            # case-insensitive fallback
+            lower_map = {c.lower(): c for c in df.columns}
+            for c in cands:
+                if c.lower() in lower_map:
+                    return lower_map[c.lower()]
+            return None
 
-        if len(T) >= 20:
-            print(f"\n  ── Hawkes Process Fit ({ticker}) ──")
-            params = fit_hawkes(T, label=f"{ticker} market orders")
-            if params is not None:
-                mu, alpha, beta = params
-                hawkes_params[ticker] = params
-                plot_hawkes_intensity(T, mu, alpha, beta, ticker)
-                plot_residual_qqplot(T, mu, alpha, beta, ticker)
+        ask_p = _pick_col(["AskPrice1", "Ask Price 1", "AskPrice_1", "ask_price_1"])
+        bid_p = _pick_col(["BidPrice1", "Bid Price 1", "BidPrice_1", "bid_price_1"])
+        ask_s = _pick_col(["AskSize1",  "Ask Size 1",  "AskSize_1",  "ask_size_1"])
+        bid_s = _pick_col(["BidSize1",  "Bid Size 1",  "BidSize_1",  "bid_size_1"])
+
+        if ask_p is None or bid_p is None or ask_s is None or bid_s is None:
+            raise KeyError(
+                "Cannot find top-of-book columns for summary stats. "
+                f"Found columns start: {list(df.columns[:40])}"
+            )
+
+        spread = (df[ask_p] - df[bid_p]).mean()
+        depth1 = (df[ask_s] + df[bid_s]).mean()
+        mo_cnt = int((df["Type"] == 4).sum())
+        summaries[ticker] = {
+            "mean_spread": float(spread),
+            "mean_top_depth": float(depth1),
+            "market_orders": mo_cnt
+        }
+
+        # ── Hawkes fits (1D, 2D, 4D) ───────────────────────────────────────
+
+        # (A) 1D Hawkes on ALL market orders (original behaviour)
+        mo_all = df[df["Type"] == 4]
+        T_all  = np.sort(mo_all["Time"].values.astype(float))
+        if len(T_all) >= 20:
+            print(f"\n  ── 1D Hawkes Fit ({ticker}) — all market orders ──")
+            params_all = fit_hawkes(T_all, label=f"{ticker} all market orders")
+            if params_all is not None:
+                mu1, alpha1, beta1 = params_all
+                hawkes_params[ticker] = params_all
+
+                plot_hawkes_intensity(T_all, mu1, alpha1, beta1, ticker)
+                if plt.get_fignums():
+                    _save_current_fig(f"hawkes_1d_intensity_{ticker}.png")
+
+                plot_residual_qqplot(T_all, mu1, alpha1, beta1, ticker)
+                if plt.get_fignums():
+                    _save_current_fig(f"hawkes_1d_qqplot_{ticker}.png")
         else:
-            print(f"  ⚠  Not enough market orders for Hawkes fit ({ticker}).")
+            print(f"  ⚠  Not enough market orders for 1D Hawkes ({ticker}).")
+
+        # (B) 1D Hawkes on BUY-initiated vs SELL-initiated market orders
+        mo_buy  = df[(df["Type"] == 4) & (df["TradeDirection"] == 1)]["Time"].values
+        mo_sell = df[(df["Type"] == 4) & (df["TradeDirection"] == -1)]["Time"].values
+        mo_buy  = np.sort(mo_buy[np.isfinite(mo_buy)].astype(float))
+        mo_sell = np.sort(mo_sell[np.isfinite(mo_sell)].astype(float))
+
+        print(f"\n  ── 1D Hawkes Fit ({ticker}) — buy vs sell market orders ──")
+        br_buy = br_sell = None
+
+        if len(mo_buy) >= 20:
+            p_buy = fit_hawkes(mo_buy, label=f"{ticker} buy-side MO")
+            if p_buy is not None:
+                br_buy = p_buy[1] / p_buy[2]
+                print(f"    buy-side branching ratio α/β = {br_buy:.4f}")
+        else:
+            print("    ⚠  Not enough buy-side MOs to fit.")
+
+        if len(mo_sell) >= 20:
+            p_sell = fit_hawkes(mo_sell, label=f"{ticker} sell-side MO")
+            if p_sell is not None:
+                br_sell = p_sell[1] / p_sell[2]
+                print(f"    sell-side branching ratio α/β = {br_sell:.4f}")
+        else:
+            print("    ⚠  Not enough sell-side MOs to fit.")
+
+        if (br_buy is not None) and (br_sell is not None):
+            if abs(br_buy - br_sell) < 0.05:
+                print("    → Buy and sell flows look similarly self-exciting (branching ratios close).")
+            elif br_buy > br_sell:
+                print("    → Buy flow appears MORE self-exciting than sell flow (higher branching ratio).")
+            else:
+                print("    → Sell flow appears MORE self-exciting than buy flow (higher branching ratio).")
+
+        # (C) 2D Hawkes: Up vs Down mid-price moves
+        up_t, dn_t = extract_up_down_midprice_times(df)
+        print(f"\n  ── 2D Hawkes Fit ({ticker}) — up/down mid-price moves ──")
+        res2 = fit_mv_hawkes([up_t, dn_t],
+                             label=f"{ticker} 2D price moves",
+                             dim_names=["UP", "DOWN"],
+                             stability_rho_max=0.99,
+                             n_starts=6,
+                             verbose=True)
+        if res2 is not None:
+            # intensity plots (should create 2 separate figures)
+            plot_mv_hawkes_intensity([up_t, dn_t], res2,
+                                     label=f"{ticker} 2D (UP/DOWN)",
+                                     dim_names=["UP", "DOWN"])
+            # save all currently open figures produced by this call
+            for fnum in list(plt.get_fignums()):
+                fig = plt.figure(fnum)
+                title = fig.axes[0].get_title() if fig.axes else ""
+                if "UP" in title:
+                    _save_current_fig(f"mv2d_intensity_UP_{ticker}.png")
+                elif "DOWN" in title:
+                    _save_current_fig(f"mv2d_intensity_DOWN_{ticker}.png")
+                else:
+                    _save_current_fig(f"mv2d_intensity_{ticker}_{fnum}.png")
+
+            # branching heatmap (one figure)
+            plot_branching_heatmap(res2["A"],
+                                   dim_names=["UP", "DOWN"],
+                                   title=f"{ticker} 2D branching matrix A (target rows, source cols)")
+            if plt.get_fignums():
+                _save_current_fig(f"mv2d_branching_{ticker}.png")
+
+        # (D) 4D Hawkes: Up/Down + BuyMO/SellMO
+        print(f"\n  ── 4D Hawkes Fit ({ticker}) — price moves + market orders ──")
+        res4 = fit_mv_hawkes([up_t, dn_t, mo_buy, mo_sell],
+                             label=f"{ticker} 4D (UP,DOWN,BUY_MO,SELL_MO)",
+                             dim_names=["UP", "DOWN", "BUY_MO", "SELL_MO"],
+                             stability_rho_max=0.99,
+                             n_starts=5,
+                             verbose=True)
+        if res4 is not None:
+            plot_mv_hawkes_intensity([up_t, dn_t, mo_buy, mo_sell], res4,
+                                     label=f"{ticker} 4D",
+                                     dim_names=["UP", "DOWN", "BUY_MO", "SELL_MO"])
+            # save all currently open figures produced by this call
+            for fnum in list(plt.get_fignums()):
+                fig = plt.figure(fnum)
+                title = fig.axes[0].get_title() if fig.axes else ""
+                if "UP" in title:
+                    _save_current_fig(f"mv4d_intensity_UP_{ticker}.png")
+                elif "DOWN" in title:
+                    _save_current_fig(f"mv4d_intensity_DOWN_{ticker}.png")
+                elif "BUY_MO" in title:
+                    _save_current_fig(f"mv4d_intensity_BUY_MO_{ticker}.png")
+                elif "SELL_MO" in title:
+                    _save_current_fig(f"mv4d_intensity_SELL_MO_{ticker}.png")
+                else:
+                    _save_current_fig(f"mv4d_intensity_{ticker}_{fnum}.png")
+
+            plot_branching_heatmap(res4["A"],
+                                   dim_names=["UP", "DOWN", "BUY_MO", "SELL_MO"],
+                                   title=f"{ticker} 4D branching matrix A (target rows, source cols)")
+            if plt.get_fignums():
+                _save_current_fig(f"mv4d_branching_{ticker}.png")
 
     # ── 2.2  Cross-stock comparison ────────────────────────────────────────
     if len(summaries) > 1:
@@ -1115,8 +1761,10 @@ def run_pipeline(tickers=None, start=START_DATE, end=END_DATE, data_path=DATA_PA
         print("  STEP FINAL — Cross-stock Comparison")
         print(f"{'='*65}")
         plot_cross_stock_summary(summaries)
+        if plt.get_fignums():
+            _save_current_fig("cross_stock_summary_extra.png")
 
-    # ── Hawkes parameter comparison ────────────────────────────────────────
+    # ── Hawkes parameter comparison (for the 1D all-market-orders fits) ─────
     if hawkes_params:
         tks      = list(hawkes_params.keys())
         mu_vals  = [hawkes_params[t][0] for t in tks]
@@ -1143,9 +1791,10 @@ def run_pipeline(tickers=None, start=START_DATE, end=END_DATE, data_path=DATA_PA
                         ha="center", va="bottom", fontsize=8)
 
         plt.tight_layout()
-        plt.savefig("hawkes_comparison.png", dpi=120, bbox_inches="tight")
-        plt.show()
-        print("Saved: hawkes_comparison.png")
+        # Save into plots/ (instead of project root)
+        plt.savefig(os.path.join(PLOT_DIR, "hawkes_comparison.png"), dpi=140, bbox_inches="tight")
+        plt.close()
+        print(f"Saved: {os.path.join(PLOT_DIR, 'hawkes_comparison.png')}")
 
     print("\n✓  Pipeline complete.")
     return summaries, hawkes_params
