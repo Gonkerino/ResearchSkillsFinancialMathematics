@@ -21,6 +21,7 @@
 # =============================================================================
 
 import os
+import time
 import datetime as dt
 import warnings
 warnings.filterwarnings("ignore")
@@ -1051,6 +1052,7 @@ def run_pipeline(tickers=None, start=START_DATE, end=END_DATE, data_path=DATA_PA
     end       : str            "YYYY-MM-DD"
     data_path : str            Folder with LOBSTER files
     """
+    t0 = time.perf_counter()
     if tickers is None:
         tickers = STOCKS
 
@@ -1155,7 +1157,8 @@ def run_pipeline(tickers=None, start=START_DATE, end=END_DATE, data_path=DATA_PA
         plt.close()
         print(f"Saved: {fname}")
 
-    print("\n✓  Pipeline complete.")
+    elapsed = time.perf_counter() - t0
+    print(f"\n✓  Pipeline complete ({elapsed:.1f}s).")
     return summaries, hawkes_params
 
 

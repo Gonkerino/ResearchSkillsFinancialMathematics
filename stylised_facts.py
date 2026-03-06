@@ -7,6 +7,7 @@ Recreates the 2-panel stylised-facts figure from main.py:
 """
 
 import os
+import time
 import warnings
 
 import numpy as np
@@ -357,6 +358,7 @@ def plot_aic_comparison(results):
 def run_stylised_facts_multi_dist(tickers=None, start=START_DATE, end=END_DATE,
                                data_path=DATA_PATH):
     """Run Weibull stylised-facts plots for each requested ticker."""
+    t0 = time.perf_counter()
     if tickers is None:
         tickers = STOCKS
 
@@ -384,7 +386,8 @@ def run_stylised_facts_multi_dist(tickers=None, start=START_DATE, end=END_DATE,
     plot_cross_ticker_stylised_comparison(comparison_results)
     plot_aic_comparison(comparison_results)
 
-    print(f"\nDone. Weibull stylised plots are in: {os.path.abspath(PLOTS_DIR)}")
+    elapsed = time.perf_counter() - t0
+    print(f"\nDone ({elapsed:.1f}s). Weibull stylised plots are in: {os.path.abspath(PLOTS_DIR)}")
 
 
 if __name__ == "__main__":

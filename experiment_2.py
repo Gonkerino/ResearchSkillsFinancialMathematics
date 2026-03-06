@@ -14,6 +14,7 @@
 
 import os
 import sys
+import time
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
@@ -445,6 +446,7 @@ def run_experiment_2(tickers=None, start=START_DATE, end=END_DATE,
     Produces per-stock plots plus a cross-stock branching ratio comparison.
     """
     from main import STOCKS
+    t0 = time.perf_counter()
     if tickers is None:
         tickers = STOCKS   # ["AMZN", "AAPL", "GOOG", "MSFT", "INTC"]
 
@@ -452,6 +454,7 @@ def run_experiment_2(tickers=None, start=START_DATE, end=END_DATE,
     fitted_tickers = []
 
     for ticker in tickers:
+        t_stock = time.perf_counter()
         print(f"\n{'='*60}")
         print(f"  Experiment 2 — Directional Asymmetry  [{ticker}]")
         print(f"{'='*60}")
@@ -525,13 +528,16 @@ def run_experiment_2(tickers=None, start=START_DATE, end=END_DATE,
         # Stylised facts panel (inter-arrival + signed-move ACF)
         plot_interarrival_hist(mo_buy, mo_sell, df, ticker)
 
+        print(f"  [{ticker}] done in {time.perf_counter() - t_stock:.1f}s")
+
     # ── Cross-stock comparison (all fitted tickers together) ──────────────────
     if len(fitted_tickers) > 1:
         print(f"\n{'='*60}")
         print("  Cross-stock branching ratio comparison …")
         plot_cross_stock_branching(all_results, fitted_tickers)
 
-    print(f"\n  ✓  Experiment 2 complete.  All plots in: {os.path.abspath(PLOTS_DIR)}/")
+    elapsed = time.perf_counter() - t0
+    print(f"\n  ✓  Experiment 2 complete  ({elapsed:.1f}s).  All plots in: {os.path.abspath(PLOTS_DIR)}/")
     return all_results
 
 
