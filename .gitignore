@@ -3,5 +3,5 @@ data/*.csv
 .DS_Store
 data/.DS_Store
 __pycache__/
-
 extended_hawkes.py
+bin/
