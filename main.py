@@ -34,10 +34,25 @@ import matplotlib.ticker as mticker
 from matplotlib.patches import FancyArrowPatch
 from scipy.optimize import minimize
 from statsmodels.tsa.api import VAR
+try:
+    from rich.console import Console
+    from rich.progress import (
+        Progress,
+        SpinnerColumn,
+        TextColumn,
+        BarColumn,
+        MofNCompleteColumn,
+        TimeElapsedColumn,
+        TimeRemainingColumn,
+    )
+    from rich.panel import Panel
+    HAVE_RICH = True
+except ModuleNotFoundError:
+    HAVE_RICH = False
 
-# ---------------------------------------------------------------------------
+# =============================================================================
 # Global display settings
-# ---------------------------------------------------------------------------
+# =============================================================================
 plt.rcParams.update({
     "figure.figsize"  : (12, 5),
     "axes.spines.top" : False,
@@ -51,9 +66,9 @@ STOCKS   = ["AMZN", "AAPL", "GOOG", "MSFT", "INTC"]
 COLORS   = {"AMZN": "#FF9900", "AAPL": "#555555", "GOOG": "#4285F4",
             "MSFT": "#00A4EF", "INTC": "#CC0000"}
 
-# ─────────────────────────────────────────────────────────────────────────────
+# =============================================================================
 # 0.  CONFIGURE PATHS  (edit these two lines)
-# ─────────────────────────────────────────────────────────────────────────────
+# =============================================================================
 DATA_PATH  = "data/"          # folder containing all LOBSTER CSV files from https://data.lobsterdata.com/info/DataSamples.php
 START_DATE = "2012-06-21"     # first date to load (YYYY-MM-DD)
 END_DATE   = "2012-06-21"     # last  date to load (YYYY-MM-DD)
@@ -62,13 +77,31 @@ END_DATE   = "2012-06-21"     # last  date to load (YYYY-MM-DD)
 PLOTS_DIR  = os.path.join("plots", "main")
 os.makedirs(PLOTS_DIR, exist_ok=True)
 
+console = Console() if HAVE_RICH else None
+_QUIET_LOGS = False
+
+
+def set_quiet_logs(flag):
+    """Enable/disable non-critical logging (used during live progress rendering)."""
+    global _QUIET_LOGS
+    _QUIET_LOGS = bool(flag)
+
+
+def _log(msg, force=False):
+    """Unified logger: rich if available, print otherwise."""
+    if _QUIET_LOGS and not force:
+        return
+    if HAVE_RICH and console is not None:
+        console.print(msg)
+    else:
+        print(msg)
+
 
 # =============================================================================
 # SECTION 1 — LOBSTER DATA LOADER
 # =============================================================================
-# ─────────────────────────────────────────────────────────────────────────────
 # 1.1  Background: what does a Limit Order Book look like?
-# ─────────────────────────────────────────────────────────────────────────────
+# =============================================================================
 """
 A Limit Order Book (LOB) records every buy and sell order that has been
 submitted but not yet filled.  Think of it as two sorted queues:
@@ -169,7 +202,7 @@ class Loader:
             if msg_path is None or ob_path is None:
                 continue
 
-            print(f"  Loading {self.ric}  {date_str} …")
+            _log(f"  Loading {self.ric}  {date_str} ...")
 
             # ── Message book ──────────────────────────────────────────────
             msg = pd.read_csv(
@@ -222,8 +255,8 @@ class Loader:
             data.append(combined)
 
         if not data:
-            print(f"  ⚠  No data found for {self.ric} between {self.sDate} and {self.eDate}.")
-            print(f"     Expected files in: {os.path.abspath(self.dataPath)}")
+            _log(f"  [yellow]⚠[/yellow] No data found for {self.ric} between {self.sDate} and {self.eDate}.", force=True)
+            _log(f"     Expected files in: {os.path.abspath(self.dataPath)}", force=True)
 
         return data
 
@@ -467,7 +500,7 @@ def plot_lob_diagram():
     fname = os.path.join(PLOTS_DIR, "lob_diagram.png")
     plt.savefig(fname, dpi=300, bbox_inches="tight")
     plt.close()
-    print(f"Saved: {fname}")
+    _log(f"Saved: {fname}")
 
 
 def plot_lob_snapshot(df, ticker, n_levels=5, title_extra=""):
@@ -505,7 +538,7 @@ def plot_lob_snapshot(df, ticker, n_levels=5, title_extra=""):
     fname = os.path.join(PLOTS_DIR, f"lob_snapshot_{ticker}.png")
     plt.savefig(fname, dpi=300, bbox_inches="tight")
     plt.close()
-    print(f"Saved: {fname}")
+    _log(f"Saved: {fname}")
 
 
 def plot_midprice_and_spread(df, ticker):
@@ -546,7 +579,7 @@ def plot_midprice_and_spread(df, ticker):
     fname = os.path.join(PLOTS_DIR, f"midprice_spread_{ticker}.png")
     plt.savefig(fname, dpi=300, bbox_inches="tight")
     plt.close()
-    print(f"Saved: {fname}")
+    _log(f"Saved: {fname}")
 
 
 def plot_event_breakdown(df, ticker):
@@ -575,7 +608,7 @@ def plot_event_breakdown(df, ticker):
     fname = os.path.join(PLOTS_DIR, f"event_breakdown_{ticker}.png")
     plt.savefig(fname, dpi=300, bbox_inches="tight")
     plt.close()
-    print(f"Saved: {fname}")
+    _log(f"Saved: {fname}")
 
 
 def plot_depth_heatmap(df, ticker, n_levels=5, n_bins=50):
@@ -619,7 +652,7 @@ def plot_depth_heatmap(df, ticker, n_levels=5, n_bins=50):
     fname = os.path.join(PLOTS_DIR, f"depth_heatmap_{ticker}.png")
     plt.savefig(fname, dpi=300, bbox_inches="tight")
     plt.close()
-    print(f"Saved: {fname}")
+    _log(f"Saved: {fname}")
 
 
 def plot_cross_stock_summary(summaries):
@@ -668,21 +701,21 @@ def plot_cross_stock_summary(summaries):
     fname = os.path.join(PLOTS_DIR, "cross_stock_summary.png")
     plt.savefig(fname, dpi=300, bbox_inches="tight")
     plt.close()
-    print(f"Saved: {fname}")
+    _log(f"Saved: {fname}")
 
 
 # =============================================================================
 # SECTION 3 — STYLISED FACTS
 # =============================================================================
 
-def compute_stylised_facts(df, ticker):
+def compute_stylised_facts(df, ticker, quiet=False):
     """
     Plot inter-arrival time distribution and signed-move autocorrelation
     for market-order events in `df`.
     """
     mo = df[df["Type"] == 4].copy()
     if len(mo) < 10:
-        print(f"  ⚠  Not enough market orders for {ticker} to compute stylised facts.")
+        _log(f"  [yellow]⚠[/yellow] Not enough market orders for {ticker} to compute stylised facts.", force=not quiet)
         return
 
     T = mo["Time"].values
@@ -715,8 +748,18 @@ def compute_stylised_facts(df, ticker):
 
     # ── Signed-move autocorrelation ───────────────────────────────────────
     max_lag = min(30, len(X) - 2)
-    lags    = range(1, max_lag + 1)
-    acf     = [np.corrcoef(X[:-k], X[k:])[0, 1] for k in lags]
+    lags    = np.arange(1, max_lag + 1)
+    if max_lag >= 1:
+        xc = X - X.mean()
+        var = float(np.dot(xc, xc))
+        if var == 0.0:
+            acf = np.zeros(max_lag)
+        else:
+            full = np.correlate(xc, xc, mode="full")
+            mid = len(full) // 2
+            acf = full[mid + 1: mid + 1 + max_lag] / var
+    else:
+        acf = np.array([])
     ax2.bar(lags, acf, color=COLORS.get(ticker, "steelblue"), alpha=0.8)
     ax2.axhline(0, color="black", lw=0.8)
     # 95 % confidence band (i.i.d. benchmark)
@@ -732,47 +775,48 @@ def compute_stylised_facts(df, ticker):
     fname = os.path.join(PLOTS_DIR, f"stylised_facts_{ticker}.png")
     plt.savefig(fname, dpi=300, bbox_inches="tight")
     plt.close()
-    print(f"Saved: {fname}")
+    _log(f"Saved: {fname}")
 
 
 # =============================================================================
 # SECTION 4 — VAR MEMORY TEST
 # =============================================================================
 
-def var_memory_test(df, ticker, bin_length=1.0, max_lags=10):
+def var_memory_test(df, ticker, bin_length=1.0, max_lags=10, quiet=False):
     """
     Bin market-order events into `bin_length`-second windows and fit a
     Vector Auto-Regression to test for temporal dependence.
 
     Returns the fitted VAR result object.
     """
-    mo   = df[df["Type"] == 4]
-    T    = mo["Time"].values
+    mo = df[df["Type"] == 4]
+    T = mo["Time"].values
     if len(T) < 50:
-        print(f"  ⚠  Too few market orders for VAR test ({ticker}).")
+        _log(f"  [yellow]⚠[/yellow] Too few market orders for VAR test ({ticker}).", force=not quiet)
         return None
 
-    bins   = np.arange(T.min(), T.max(), bin_length)
+    bins = np.arange(T.min(), T.max(), bin_length)
     counts, _ = np.histogram(T, bins=bins)
 
     count_df = pd.DataFrame({"N": counts})
-    # VAR requires ≥2 variables — add lagged columns as a second series
+    # VAR requires >=2 variables - add lagged columns as a second series
     count_df["N_lag1"] = count_df["N"].shift(1).fillna(0)
-    model    = VAR(count_df)
+    model = VAR(count_df)
     try:
         res = model.fit(maxlags=max_lags, ic="aic")
     except Exception as e:
-        print(f"  ⚠  VAR fitting failed for {ticker}: {e}")
+        _log(f"  [yellow]⚠[/yellow] VAR fitting failed for {ticker}: {e}", force=not quiet)
         return None
 
-    print(f"\n{'='*60}")
-    print(f"  VAR Memory Test — {ticker}  (bin = {bin_length}s)")
-    print(f"  Selected lag order : {res.k_ar}")
-    print(f"  AIC                : {res.aic:.2f}")
-    print(f"  If lag > 0 → market-order arrivals have memory (consistent with Hawkes).")
-    print(f"{'='*60}\n")
-    return res
+    if not quiet:
+        _log(f"\n{'='*60}", force=True)
+        _log(f"  VAR Memory Test - {ticker}  (bin = {bin_length}s)", force=True)
+        _log(f"  Selected lag order : {res.k_ar}", force=True)
+        _log(f"  AIC                : {res.aic:.2f}", force=True)
+        _log("  If lag > 0 -> market-order arrivals have memory (consistent with Hawkes).", force=True)
+        _log(f"{'='*60}\n", force=True)
 
+    return res
 
 # =============================================================================
 # SECTION 5 — 1-D HAWKES PROCESS (exponential kernel)
@@ -894,24 +938,26 @@ def _make_inits(T, n_starts=8):
             ]))
     return inits
 
-def fit_hawkes(T, label=""):
+def fit_hawkes(T, label="", quiet=False):
     T = np.sort(np.asarray(T, dtype=float))
     T = T - T[0]                    # zero-index time (important for numerical stability)
     T = T[np.isfinite(T)]
     if len(T) < 20:
-        print(f"  ⚠  Not enough events to fit Hawkes ({label}).")
+        _log(f"  [yellow]⚠[/yellow] Not enough events to fit Hawkes ({label}).", force=not quiet)
         return None
 
-    best_res, best_val = None, np.inf
-    mean_ia   = np.mean(np.diff(T))
-    beta_max  = 10.0 / mean_ia      # fastest meaningful decay ~ 10x the mean inter-arrival
-    alpha_max = 0.99 * beta_max     # enforce branching ratio < 1 hard
+    best_res = None
+    best_val = np.inf
+    mean_ia = np.mean(np.diff(T))
+    beta_max = 10.0 / mean_ia      # fastest meaningful decay ~ 10x the mean inter-arrival
+    alpha_max = 0.99 * beta_max    # enforce branching ratio < 1 hard
 
     bounds = [
         (1e-6, None),        # mu
         (1e-6, alpha_max),   # alpha
         (1e-3, beta_max),    # beta
     ]
+    all_res = []
     for init in _make_inits(T):
         res = minimize(
             hawkes_loglik_grad, init, args=(T,),
@@ -920,49 +966,61 @@ def fit_hawkes(T, label=""):
             bounds=bounds,
             options={"ftol": 1e-12, "gtol": 1e-8, "maxiter": 500},
         )
-        if res.fun < best_val and res.success:
+        all_res.append(res)
+        if res.success and res.fun < best_val:
             best_val = res.fun
             best_res = res
 
-    # Fallback: accept best non-converged result if nothing succeeded
+    # Fallback: if no converged run, keep the best finite objective from same runs.
     if best_res is None:
-        best_res = min(
-            [minimize(hawkes_loglik_grad, init, args=(T,), method="L-BFGS-B",
-                      jac=True,
-                      bounds=[(1e-6, None), (1e-6, None), (1e-3, None)])
-             for init in _make_inits(T)],
-            key=lambda r: r.fun
-        )
+        finite = [r for r in all_res if np.isfinite(r.fun)]
+        if not finite:
+            _log(f"  [yellow]⚠[/yellow] Hawkes optimisation failed ({label}).", force=not quiet)
+            return None
+        best_res = min(finite, key=lambda r: r.fun)
 
     mu, alpha, beta = best_res.x
     br = alpha / beta
 
-    print(f"\n{'─'*50}")
-    print(f"  Hawkes fit — {label}")
-    print(f"  μ (baseline)      = {mu:.5f}  events/sec")
-    print(f"  α (jump size)     = {alpha:.5f}")
-    print(f"  β (decay rate)    = {beta:.5f}")
-    print(f"  Branching ratio   = {br:.4f}")
-    if br >= 1:
-        print("  ⚠  Branching ratio ≥ 1 → non-stationary; check data quality.")
-    else:
-        print(f"  → ~{br*100:.1f}% of events are triggered by previous events.")
-    print(f"{'─'*50}\n")
+    if not quiet:
+        _log(f"\n{'-' * 50}", force=True)
+        _log(f"  Hawkes fit - {label}", force=True)
+        _log(f"  mu (baseline)      = {mu:.5f}  events/sec", force=True)
+        _log(f"  alpha (jump size)  = {alpha:.5f}", force=True)
+        _log(f"  beta (decay rate)  = {beta:.5f}", force=True)
+        _log(f"  Branching ratio    = {br:.4f}", force=True)
+        if br >= 1:
+            _log("  [yellow]⚠[/yellow] Branching ratio >= 1 -> non-stationary; check data quality.", force=True)
+        else:
+            _log(f"  -> ~{br * 100:.1f}% of events are triggered by previous events.", force=True)
+        _log(f"{'-' * 50}\n", force=True)
+
     return mu, alpha, beta
 
-
-def plot_hawkes_intensity(T, mu, alpha, beta, ticker, n_grid=2000):
+def plot_hawkes_intensity(T, mu, alpha, beta, ticker, n_grid=2000, quiet=False):
     """
     Plot the fitted Hawkes intensity λ(t) against the raw event times.
     """
     T = np.sort(np.asarray(T, dtype=float))
     t_grid = np.linspace(T[0], T[-1], n_grid)
 
-    # Evaluate intensity at each grid point (vectorised for speed)
-    lam = np.array([
-        mu + alpha * np.sum(np.exp(-beta * (t - T[T < t])))
-        for t in t_grid
-    ])
+    # Evaluate intensity via a recursive accumulator in O(n_grid + n_events).
+    lam = np.empty_like(t_grid)
+    accum = 0.0
+    prev_t = t_grid[0]
+    j = 0
+    n_events = len(T)
+
+    for i, t in enumerate(t_grid):
+        if i > 0:
+            accum *= np.exp(-beta * (t - prev_t))
+
+        while j < n_events and T[j] < t:
+            accum += np.exp(-beta * (t - T[j]))
+            j += 1
+
+        lam[i] = mu + alpha * accum
+        prev_t = t
 
     fig, ax = plt.subplots(figsize=(12, 4))
     ax.plot(t_grid, lam, color=COLORS.get(ticker, "steelblue"), lw=1.2, label="λ(t)")
@@ -981,10 +1039,10 @@ def plot_hawkes_intensity(T, mu, alpha, beta, ticker, n_grid=2000):
     fname = os.path.join(PLOTS_DIR, f"hawkes_intensity_{ticker}.png")
     plt.savefig(fname, dpi=300, bbox_inches="tight")
     plt.close()
-    print(f"Saved: {fname}")
+    _log(f"Saved: {fname}")
 
 
-def plot_residual_qqplot(T, mu, alpha, beta, ticker):
+def plot_residual_qqplot(T, mu, alpha, beta, ticker, quiet=False):
     """
     Goodness-of-fit via the time-change theorem:
     The compensated times  Λ(tᵢ) = ∫₀^{tᵢ} λ(t) dt  should be
@@ -1034,7 +1092,7 @@ def plot_residual_qqplot(T, mu, alpha, beta, ticker):
     fname = os.path.join(PLOTS_DIR, f"hawkes_qqplot_{ticker}.png")
     plt.savefig(fname, dpi=300, bbox_inches="tight")
     plt.close()
-    print(f"Saved: {fname}")
+    _log(f"Saved: {fname}")
 
 
 # =============================================================================
@@ -1043,7 +1101,7 @@ def plot_residual_qqplot(T, mu, alpha, beta, ticker):
 
 def run_pipeline(tickers=None, start=START_DATE, end=END_DATE, data_path=DATA_PATH):
     """
-    End-to-end pipeline: load → visualise LOB → stylised facts → Hawkes fit.
+    End-to-end pipeline: load -> visualise LOB -> stylised facts -> Hawkes fit.
 
     Parameters
     ----------
@@ -1056,85 +1114,134 @@ def run_pipeline(tickers=None, start=START_DATE, end=END_DATE, data_path=DATA_PA
     if tickers is None:
         tickers = STOCKS
 
-    # ── 2.0  Static LOB diagram ────────────────────────────────────────────
-    print("\n" + "="*65)
-    print("  STEP 0 — LOB Structure Diagram")
-    print("="*65)
+    if HAVE_RICH and console is not None:
+        console.print(Panel(
+            f"[bold]Tickers[/bold] : {', '.join(tickers)}\n"
+            f"[bold]Period[/bold]  : {start} -> {end}",
+            title="[bold cyan]Main LOB/Hawkes Pipeline[/bold cyan]",
+            border_style="cyan",
+        ))
+    else:
+        _log("\n" + "=" * 65, force=True)
+        _log("  STEP 0 - LOB Structure Diagram", force=True)
+        _log("=" * 65, force=True)
+
     plot_lob_diagram()
 
-    # ── 2.1  Per-stock loading and LOB plots ────────────────────────────────
     summaries = {}
     hawkes_params = {}
 
-    for ticker in tickers:
-        print(f"\n{'='*65}")
-        print(f"  Loading {ticker} …")
-        print(f"{'='*65}")
+    def _run_one_ticker(ticker, progress=None, stage_task=None):
+        stage_names = [
+            "loaded", "LOB snapshot", "mid/spread", "event breakdown",
+            "depth heatmap", "stylised facts", "VAR test", "Hawkes diagnostics",
+        ]
+
+        def _advance(ix):
+            if progress is not None and stage_task is not None:
+                progress.advance(stage_task)
+                progress.update(stage_task, status=stage_names[ix])
+
+        if progress is not None and stage_task is not None:
+            progress.update(stage_task, status="loading data")
 
         loader = Loader(ticker, start, end, dataPath=data_path, nlevels=10)
-        daily  = loader.load()
+        daily = loader.load()
 
         if not daily:
-            print(f"  ⚠  Skipping {ticker} (no data found).")
-            continue
+            _log(f"  [yellow]⚠[/yellow] Skipping {ticker} (no data found).", force=True)
+            if progress is not None and stage_task is not None:
+                progress.update(stage_task, status="no data")
+            return
 
         df = daily[0]
-        t_open_buffer  = df["Time"].min() + 3600   # drop first hour
-        t_close_buffer = df["Time"].max() - 3600   # drop last  hour
+        t_open_buffer = df["Time"].min() + 3600
+        t_close_buffer = df["Time"].max() - 3600
         df = df[(df["Time"] >= t_open_buffer) & (df["Time"] <= t_close_buffer)].copy()
         summaries[ticker] = df
+        _advance(0)
 
-        print(f"\n  ── LOB Snapshot ({ticker}) ──")
-        plot_lob_snapshot(df, ticker, n_levels=5, title_extra=df.Date.iloc[0])
+        plot_lob_snapshot(df, ticker, n_levels=5, title_extra=df.Date.iloc[0]); _advance(1)
+        plot_midprice_and_spread(df, ticker); _advance(2)
+        plot_event_breakdown(df, ticker); _advance(3)
+        plot_depth_heatmap(df, ticker, n_levels=5); _advance(4)
 
-        print(f"\n  ── Mid-price & Spread ({ticker}) ──")
-        plot_midprice_and_spread(df, ticker)
+        compute_stylised_facts(df, ticker, quiet=True)
+        _advance(5)
 
-        print(f"\n  ── Event Breakdown ({ticker}) ──")
-        plot_event_breakdown(df, ticker)
+        var_res = var_memory_test(df, ticker, quiet=True)
+        _advance(6)
 
-        print(f"\n  ── Depth Heatmap ({ticker}) ──")
-        plot_depth_heatmap(df, ticker, n_levels=5)
-
-        print(f"\n  ── Stylised Facts ({ticker}) ──")
-        compute_stylised_facts(df, ticker)
-
-        print(f"\n  ── VAR Memory Test ({ticker}) ──")
-        var_memory_test(df, ticker)
-
-        # ── Hawkes fit on market-order timestamps ─────────────────────────
-        mo   = df[df["Type"] == 4]
-        T    = mo["Time"].values
-        T    = np.sort(T[np.isfinite(T)])
+        mo = df[df["Type"] == 4]
+        T = np.sort(mo["Time"].values.astype(float))
+        T = T[np.isfinite(T)]
 
         if len(T) >= 20:
-            print(f"\n  ── Hawkes Process Fit ({ticker}) ──")
-            params = fit_hawkes(T, label=f"{ticker} market orders")
+            params = fit_hawkes(T, label=f"{ticker} market orders", quiet=True)
             if params is not None:
                 mu, alpha, beta = params
                 hawkes_params[ticker] = params
-                plot_hawkes_intensity(T, mu, alpha, beta, ticker)
-                plot_residual_qqplot(T, mu, alpha, beta, ticker)
+                plot_hawkes_intensity(T, mu, alpha, beta, ticker, quiet=True)
+                plot_residual_qqplot(T, mu, alpha, beta, ticker, quiet=True)
+                if HAVE_RICH and console is not None:
+                    _log(
+                        f"  [bold]{ticker}[/bold]  VAR lag={var_res.k_ar if var_res is not None else 'n/a'}  "
+                        f"|  Hawkes BR={alpha/beta:.3f}",
+                        force=True,
+                    )
         else:
-            print(f"  ⚠  Not enough market orders for Hawkes fit ({ticker}).")
+            _log(f"  [yellow]⚠[/yellow] Not enough market orders for Hawkes fit ({ticker}).", force=True)
 
-    # ── 2.2  Cross-stock comparison ────────────────────────────────────────
+        _advance(7)
+        if progress is not None and stage_task is not None:
+            progress.update(stage_task, status="done")
+
+    if HAVE_RICH and console is not None:
+        set_quiet_logs(True)
+        try:
+            with Progress(
+                SpinnerColumn(spinner_name="dots"),
+                TextColumn("[bold blue]{task.description:<24}"),
+                BarColumn(bar_width=30),
+                MofNCompleteColumn(),
+                TextColumn("[dim]·[/dim]"),
+                TimeElapsedColumn(),
+                TimeRemainingColumn(),
+                TextColumn("{task.fields[status]}"),
+                console=console,
+                refresh_per_second=10,
+            ) as progress:
+                outer = progress.add_task("tickers", total=len(tickers), status="")
+                for ticker in tickers:
+                    stage_task = progress.add_task(
+                        f"[cyan]{ticker}[/cyan]",
+                        total=8,
+                        status="starting",
+                    )
+                    _run_one_ticker(ticker, progress=progress, stage_task=stage_task)
+                    progress.advance(outer)
+        finally:
+            set_quiet_logs(False)
+    else:
+        for ticker in tickers:
+            _log(f"\n{'=' * 65}", force=True)
+            _log(f"  Loading {ticker} ...", force=True)
+            _log(f"{'=' * 65}", force=True)
+            _run_one_ticker(ticker)
+
     if len(summaries) > 1:
-        print(f"\n{'='*65}")
-        print("  STEP FINAL — Cross-stock Comparison")
-        print(f"{'='*65}")
+        _log("\n[bold cyan]Cross-stock comparison[/bold cyan]" if HAVE_RICH else "\nCross-stock comparison", force=True)
         plot_cross_stock_summary(summaries)
 
-    # ── Hawkes parameter comparison ────────────────────────────────────────
     if hawkes_params:
-        tks      = list(hawkes_params.keys())
-        mu_vals  = [hawkes_params[t][0] for t in tks]
-        br_vals  = [hawkes_params[t][1] / hawkes_params[t][2] for t in tks]
+        tks = list(hawkes_params.keys())
+        mu_vals = [hawkes_params[t][0] for t in tks]
+        br_vals = [hawkes_params[t][1] / hawkes_params[t][2] for t in tks]
 
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 4))
         fig.suptitle("Hawkes Parameters — Cross-stock Comparison", fontweight="bold")
 
-        ax1.bar(tks, mu_vals,  color=[COLORS.get(t, "grey") for t in tks])
+        ax1.bar(tks, mu_vals, color=[COLORS.get(t, "grey") for t in tks])
         ax1.set_title("Background Rate μ (events/sec)")
         ax1.set_ylabel("μ")
 
@@ -1146,22 +1253,32 @@ def run_pipeline(tickers=None, start=START_DATE, end=END_DATE, data_path=DATA_PA
 
         for ax in [ax1, ax2]:
             for bar in ax.patches:
-                ax.text(bar.get_x() + bar.get_width()/2,
-                        bar.get_height() * 1.01,
-                        f"{bar.get_height():.3f}",
-                        ha="center", va="bottom", fontsize=8)
+                ax.text(
+                    bar.get_x() + bar.get_width() / 2,
+                    bar.get_height() * 1.01,
+                    f"{bar.get_height():.3f}",
+                    ha="center",
+                    va="bottom",
+                    fontsize=8,
+                )
 
         plt.tight_layout()
         fname = os.path.join(PLOTS_DIR, "hawkes_comparison.png")
         plt.savefig(fname, dpi=300, bbox_inches="tight")
         plt.close()
-        print(f"Saved: {fname}")
+        _log(f"Saved: {fname}", force=True)
 
     elapsed = time.perf_counter() - t0
-    print(f"\n✓  Pipeline complete ({elapsed:.1f}s).")
+    if HAVE_RICH and console is not None:
+        console.print(Panel(
+            f"[bold green]Done[/bold green] in [bold]{elapsed:.1f}s[/bold] · "
+            f"plots -> [dim]{os.path.abspath(PLOTS_DIR)}[/dim]",
+            border_style="green",
+        ))
+    else:
+        _log(f"\nPipeline complete ({elapsed:.1f}s).", force=True)
+
     return summaries, hawkes_params
-
-
 # =============================================================================
 # SECTION 7 — STUDENT EXPERIMENTS
 # =============================================================================
