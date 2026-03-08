@@ -70,13 +70,8 @@ from scipy.optimize import minimize
 from scipy.special import gamma as gamma_fn
 from scipy.stats.qmc import Sobol
 from rich.progress import (Progress, BarColumn, MofNCompleteColumn,
-                           TimeElapsedColumn, TimeRemainingColumn,
-                           TextColumn, SpinnerColumn)
+                           TimeElapsedColumn, TextColumn)
 from rich.console import Console
-from rich.panel import Panel
-from rich.table import Table
-from rich.rule import Rule
-from rich import box
 
 _console = Console()
 
@@ -877,47 +872,30 @@ def plot_aic_comparison(results):
         _console.print("  No AIC data to plot.")
         return
 
-    # ── Raw AIC table ─────────────────────────────────────────────────────
-    tbl = Table(
-        title="AIC Comparison  —  raw AIC, lower is better",
-        box=box.SIMPLE_HEAD, header_style="bold magenta", title_justify="left",
-    )
-    tbl.add_column("Ticker", style="bold")
-    for d in dist_names:
-        tbl.add_column(d[:11], justify="right")
-    tbl.add_column("Winner", style="bold green", justify="right")
+    col_w  = 14
+    header = f"{'Ticker':<8}" + "".join(f"{d:>{col_w}}" for d in dist_names)
+    header += f"{'dAIC winner':>{col_w}}{'Best dist':>{col_w}}"
+    sep    = "=" * len(header)
+    _console.print(f"\n{sep}\nAIC Comparison Summary\n{sep}")
+    _console.print(header)
+    _console.print("-" * len(header))
     for t in tickers:
         if t not in raw_aic:
             continue
-        best_d = winners[t]
-        cells  = [t]
-        for d in dist_names:
-            v    = raw_aic[t][d]
-            star = " [bold green]★[/bold green]" if d == best_d else ""
-            cells.append(f"{v:.1f}{star}")
-        cells.append(best_d)
-        tbl.add_row(*cells)
-    _console.print(tbl)
-
-    # ── ΔAIC table ────────────────────────────────────────────────────────
-    dtbl = Table(
-        title="ΔAIC  (raw AIC − best AIC for that ticker)  —  winner at 0",
-        box=box.SIMPLE_HEAD, header_style="bold cyan", title_justify="left",
-    )
-    dtbl.add_column("Ticker", style="bold")
-    for d in dist_names:
-        dtbl.add_column(d[:11], justify="right")
+        row  = f"{t:<8}" + "".join(f"{raw_aic[t][d]:>{col_w}.1f}" for d in dist_names)
+        row += f"{0.0:>{col_w}.1f}{winners[t]:>{col_w}}"
+        _console.print(row)
+    _console.print(sep)
+    _console.print("\ndAIC (raw AIC - best AIC for that ticker):")
+    _console.print("-" * len(header))
+    _console.print(f"{'Ticker':<8}" + "".join(f"{d:>{col_w}}" for d in dist_names))
+    _console.print("-" * len(header))
     for t in tickers:
         if t not in delta_aic:
             continue
-        cells = [t]
-        for d in dist_names:
-            v = delta_aic[t][d]
-            cells.append(
-                f"[bold green]{v:.1f}[/bold green]" if v == 0.0 else f"{v:.1f}"
-            )
-        dtbl.add_row(*cells)
-    _console.print(dtbl)
+        _console.print(f"{t:<8}" +
+                        "".join(f"{delta_aic[t][d]:>{col_w}.1f}" for d in dist_names))
+    _console.print(sep)
 
     n_t     = len([t for t in tickers if t in delta_aic])
     n_d     = len(dist_names)
@@ -953,7 +931,7 @@ def plot_aic_comparison(results):
     fname = os.path.join(PLOTS_DIR, "aic_comparison.png")
     plt.savefig(fname, dpi=300, bbox_inches="tight")
     plt.close()
-    _console.print(f"    [dim]→ {fname}[/dim]")
+    _console.print(f"\nSaved: {fname}")
 
 
 
@@ -1013,26 +991,20 @@ def plot_aic_raw_and_normalised(results):
     winners_raw  = {t: min(raw_aic[t],  key=raw_aic[t].get)  for t in valid_tickers}
     winners_norm = {t: min(norm_aic[t], key=norm_aic[t].get) for t in valid_tickers}
 
-    # ── AIC/N table ───────────────────────────────────────────────────────
-    ntbl = Table(
-        title="AIC/N  —  per-observation AIC, cross-ticker comparable, lower is better",
-        box=box.SIMPLE_HEAD, header_style="bold magenta", title_justify="left",
-    )
-    ntbl.add_column("Ticker", style="bold")
-    ntbl.add_column("N", justify="right")
-    for d in dist_names:
-        ntbl.add_column(d[:11], justify="right")
-    ntbl.add_column("Winner", style="bold green", justify="right")
+    # ── Console table: AIC/N ─────────────────────────────────────────────────
+    col_w  = 14
+    header = f"{'Ticker':<8}{'N':>8}" + "".join(f"{d:>{col_w}}" for d in dist_names)
+    header += f"{'Best dist':>{col_w}}"
+    sep    = "=" * len(header)
+    _console.print(f"\n{sep}\nAIC/N (per-observation AIC) Summary\n{sep}")
+    _console.print(header)
+    _console.print("-" * len(header))
     for t in valid_tickers:
-        best_d = winners_norm[t]
-        cells  = [t, f"{n_events[t]:,}"]
-        for d in dist_names:
-            v    = norm_aic[t][d]
-            star = " [bold green]★[/bold green]" if d == best_d else ""
-            cells.append(f"{v:.4f}{star}")
-        cells.append(best_d)
-        ntbl.add_row(*cells)
-    _console.print(ntbl)
+        row  = f"{t:<8}{n_events[t]:>8}"
+        row += "".join(f"{norm_aic[t][d]:>{col_w}.4f}" for d in dist_names)
+        row += f"{winners_norm[t]:>{col_w}}"
+        _console.print(row)
+    _console.print(sep)
 
     # ── Plot setup ───────────────────────────────────────────────────────────
     n_t     = len(valid_tickers)
@@ -1128,7 +1100,7 @@ def plot_aic_raw_and_normalised(results):
     fname = os.path.join(PLOTS_DIR, "aic_raw_and_normalised.png")
     plt.savefig(fname, dpi=300, bbox_inches="tight")
     plt.close()
-    _console.print(f"    [dim]→ {fname}[/dim]")
+    _console.print(f"Saved: {fname}")
 
 # ===========================================================================
 # Cross-ticker comparison plot
@@ -1203,7 +1175,7 @@ def plot_cross_ticker_stylised_comparison(results):
     fname = os.path.join(PLOTS_DIR, "stylised_facts_multi_dist_comparison.png")
     plt.savefig(fname, dpi=300, bbox_inches="tight")
     plt.close()
-    _console.print(f"    [dim]→ {fname}[/dim]")
+    _console.print(f"  Saved: {fname}")
 
 
 # ===========================================================================
@@ -1239,30 +1211,23 @@ def run_stylised_facts_multi_dist(tickers=None, start=START_DATE, end=END_DATE,
     if tickers is None:
         tickers = STOCKS
 
-    _console.print(Panel(
-        f"[bold]Tickers[/bold]         : {', '.join(tickers)}\n"
-        f"[bold]Period[/bold]          : {start}  →  {end}\n"
-        f"[bold]Ticker workers[/bold]  : {MAX_TICKER_WORKERS}  ·  "
-        f"[bold]Grid workers/ticker[/bold] : {N_WORKERS}  ·  "
-        f"[bold]Max processes[/bold] : {MAX_TICKER_WORKERS * N_WORKERS}\n"
-        f"[bold]Numba[/bold]           : "
-        f"{'[green]enabled[/green]' if _NUMBA else '[yellow]off[/yellow] (pip install numba)'}  ·  "
-        f"[bold]Sobol seed[/bold] : {RANDOM_SEED}",
-        title="[bold cyan]Stylised Facts  —  Multi-Distribution Inter-Arrival Fitting[/bold cyan]",
-        border_style="cyan",
-    ))
+    _console.print(f"\n[bold]{'='*65}[/bold]")
+    _console.print(f"  Stylised Facts — {len(tickers)} ticker(s)  |  {start} -> {end}")
+    _console.print(f"  Ticker workers : {MAX_TICKER_WORKERS}  |  "
+                   f"Grid workers/ticker: {N_WORKERS}  |  "
+                   f"Max processes: {MAX_TICKER_WORKERS * N_WORKERS}")
+    _console.print(f"  Numba: {'[green]enabled[/green]' if _NUMBA else '[yellow]off[/yellow] (pip install numba)'}  |  "
+                   f"Sobol seed: {RANDOM_SEED}")
+    _console.print(f"[bold]{'='*65}[/bold]\n")
 
     progress = Progress(
-        SpinnerColumn(spinner_name="dots"),
-        TextColumn("[bold blue]{task.description:<28}"),
-        BarColumn(bar_width=36),
+        TextColumn("[bold cyan]{task.description:<20}[/bold cyan]"),
+        BarColumn(bar_width=28),
         MofNCompleteColumn(),
-        TextColumn("[dim]·[/dim]"),
         TimeElapsedColumn(),
-        TimeRemainingColumn(),
         TextColumn("{task.fields[status]}"),
         console=_console,
-        refresh_per_second=10,
+        refresh_per_second=8,
     )
 
     stage_tasks = {
@@ -1345,17 +1310,17 @@ def run_stylised_facts_multi_dist(tickers=None, start=START_DATE, end=END_DATE,
                     t = futures[fut]
                     _console.print(f"  [{t}] Unhandled error: {exc}")
 
-    _console.rule("[dim]generating comparison plots[/dim]")
+    _console.print(f"\n[dim]{'─'*65}[/dim]")
+    _console.print("  Generating comparison plots ...")
     plot_cross_ticker_stylised_comparison(comparison_results)
     plot_aic_comparison(comparison_results)
     plot_aic_raw_and_normalised(comparison_results)
 
     elapsed = time.perf_counter() - t0
-    _console.print(Panel(
-        f"[bold green]Done[/bold green] in [bold]{elapsed:.1f}s[/bold]  ·  "
-        f"plots → [dim]{os.path.abspath(PLOTS_DIR)}[/dim]",
-        border_style="green",
-    ))
+    _console.print(f"\n[bold]{'='*65}[/bold]")
+    _console.print(f"  Finished in [bold]{elapsed:.1f}s[/bold]")
+    _console.print(f"  Plots -> {os.path.abspath(PLOTS_DIR)}")
+    _console.print(f"[bold]{'='*65}[/bold]\n")
 
 
 if __name__ == "__main__":
