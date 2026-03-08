@@ -76,6 +76,7 @@
 #
 # Outputs  →  plots/kernel_sum_exp/
 #   qqplot_<TICKER>.png          QQ + residual histogram, all K
+#   qqplot_overlay_<TICKER>.png  QQ curves for all K superimposed
 #   model_selection_<TICKER>.png AIC, BIC, KS vs K per ticker
 #   kernel_shape_<TICKER>.png    Fitted kernel φ(Δt) for each K
 #   summary_ks.png               Cross-ticker KS heatmap (K × ticker)
@@ -915,6 +916,67 @@ def plot_qq_grid(results: dict[int, dict], ticker: str, T: np.ndarray) -> None:
     console.print(f"    [dim]→ {path}[/dim]")
 
 
+def plot_qq_overlay(results: dict[int, dict], ticker: str) -> None:
+    """
+    Single-axis QQ overlay: one residual QQ curve per K on the same plot.
+    """
+    if not results:
+        return
+
+    ks_present = sorted(results.keys())
+    colors     = plt.cm.viridis(np.linspace(0.10, 0.92, len(ks_present)))
+
+    fig, ax = plt.subplots(figsize=(9.5, 7.2))
+    fig.suptitle(
+        f"{ticker} — QQ Overlay: Time-change residuals vs Exp(1)",
+        fontsize=13, fontweight="bold",
+    )
+
+    max_lim_full = 0.0
+    for color, K in zip(colors, ks_present):
+        res = results[K]
+        inc = np.asarray(res["compensator_inc"], dtype=np.float64)
+        inc = np.sort(inc[inc > 0.0])
+        if len(inc) == 0:
+            continue
+
+        probs = np.linspace(0.002, 0.998, len(inc))
+        q_th  = -np.log(1.0 - probs)
+        max_lim_full = max(max_lim_full, float(q_th[-1]), float(inc[-1]))
+        ax.plot(
+            q_th, inc,
+            lw=2.0 if K == ks_present[-1] else 1.6,
+            alpha=0.95 if K == ks_present[-1] else 0.82,
+            color=color,
+            label=f"K={K}  KS={res['ks_stat']:.4f}",
+        )
+
+    lim = max_lim_full * 1.03 if max_lim_full > 0.0 else 1.0
+
+    ax.plot([0, lim], [0, lim], "k--", lw=1.4, alpha=0.8, label="Perfect fit")
+    ax.set_xlim(0, lim)
+    ax.set_ylim(0, lim)
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_xlabel("Theoretical Exp(1) quantiles")
+    ax.set_ylabel("Empirical residual quantiles")
+    ax.set_title("All K values superimposed (full range)")
+    ax.legend(
+        fontsize=8.3,
+        frameon=False,
+        ncol=1,
+        loc="center left",
+        bbox_to_anchor=(1.01, 0.5),
+    )
+    ax.grid(True, which="major", alpha=0.28)
+    ax.grid(True, which="minor", alpha=0.10)
+
+    plt.tight_layout(rect=[0.0, 0.0, 0.80, 1.0])
+    path = os.path.join(PLOTS_DIR, f"qqplot_overlay_{ticker}.png")
+    plt.savefig(path, dpi=220, bbox_inches="tight")
+    plt.close()
+    console.print(f"    [dim]→ {path}[/dim]")
+
+
 def plot_model_selection(results: dict[int, dict], ticker: str) -> None:
     """
     Three-panel model selection figure:
@@ -1358,6 +1420,7 @@ def run_sumexp_analysis(
             # ── Plots ──────────────────────────────────────────────────────
             progress.update(inner, description=f"[green]{ticker}  saving plots …")
             plot_qq_grid(results, ticker, T_zeroed)
+            plot_qq_overlay(results, ticker)
             plot_model_selection(results, ticker)
             plot_kernel_shapes(results, ticker)
 
