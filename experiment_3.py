@@ -832,4 +832,5 @@ def run_experiment3_directional(tickers=None, start=START_DATE, end=END_DATE, da
     return results
 
 if __name__ == "__main__":
-    results = run_experiment3_directional(tickers=["AMZN"])
+    results = run_experiment3_directional()
+    
