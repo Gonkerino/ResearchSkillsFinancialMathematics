@@ -824,7 +824,7 @@ def fit_power_hawkes(
         tau_lower = float(np.percentile(pos_diffs, 5))
     else:
         tau_lower = float(pos_diffs.min()) if pos_diffs.size else 0.01
-    tau_lower = max(tau_lower, 1e-4)
+    tau_lower = max(tau_lower, 1e-6)
 
     tau_upper = max(50.0 * mean_ia, 1.0)
     n_upper   = 0.95   # branching ratio above this is near-critical and unphysical
@@ -833,7 +833,7 @@ def fit_power_hawkes(
         (1e-8,      None),           # mu
         (1e-6,      n_upper),        # n
         (tau_lower, tau_upper),      # tau
-        (1.01,      10.0),           # eta
+        (1.01,      50.0),           # eta  
     ]
 
     _emit(
