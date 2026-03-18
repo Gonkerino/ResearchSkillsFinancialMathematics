@@ -39,8 +39,9 @@ Notes
 1) This is the exact power-law likelihood, not an exponential-mixture surrogate.
 2) To stay consistent with `main.py`, the event definition here is market
    orders (Type == 4) after the same 1-hour opening/closing buffer.
-3) The code handles duplicated timestamps by a tiny deterministic de-tying jitter
-   so the point process remains strictly ordered.
+3) The code handles duplicated timestamps with a resolution-aware deterministic
+   de-tying jitter so the point process remains strictly ordered without
+   inventing sub-resolution gaps.
 
 Usage
 -----
@@ -66,7 +67,7 @@ import math
 import os
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Tuple
 
 # Force non-GUI backend before pyplot import to avoid Tk thread teardown issues.
@@ -213,6 +214,7 @@ class PowerFitResult:
     message:  str
     ks_stat:  Optional[float] = None
     ks_pvalue: Optional[float] = None
+    residuals: Optional[np.ndarray] = field(default=None, repr=False)
 
     @property
     def c(self) -> float:
@@ -240,19 +242,49 @@ class ExpFitSummary:
         return 2 * 3 + 2 * self.nll
 
 
+def _prepare_fit_times(T: np.ndarray, assume_prepared: bool = False) -> np.ndarray:
+    """
+    Return event times in the exact format expected by the fitter:
+    sorted, finite, contiguous, and zero-indexed.
+
+    ``assume_prepared=True`` is the internal fast path once the pipeline has
+    already normalised ``T`` upstream.
+    """
+    T = np.ascontiguousarray(T, dtype=np.float64)
+    if assume_prepared:
+        if T.size and T[0] != 0.0:
+            T = np.ascontiguousarray(T - T[0], dtype=np.float64)
+        return T
+
+    T = np.sort(T)
+    T = T[np.isfinite(T)]
+    if T.size:
+        T = np.ascontiguousarray(T - T[0], dtype=np.float64)
+    return np.ascontiguousarray(T, dtype=np.float64)
+
+
+def _prepare_sorted_times(T: np.ndarray, assume_prepared: bool = False) -> np.ndarray:
+    """Return a contiguous sorted array unless the caller guarantees that already."""
+    T = np.ascontiguousarray(T, dtype=np.float64)
+    if assume_prepared:
+        return T
+    return np.ascontiguousarray(np.sort(T), dtype=np.float64)
+
+
 # =============================================================================
 # Data loading helpers
 # =============================================================================
 def detie_timestamps(
     T: np.ndarray,
-    eps: Optional[float] = None,
+    resolution: Optional[float] = None,
 ) -> Tuple[np.ndarray, int, float]:
     """
-    Make event times strictly increasing with a tiny deterministic jitter.
+    Make event times strictly increasing with a resolution-aware deterministic
+    jitter.
 
     Returns
     -------
-    T_out, n_adjusted, eps_used
+    T_out, n_adjusted, resolution_used
     """
     T = np.asarray(T, dtype=float).copy()
     if T.size <= 1:
@@ -262,8 +294,14 @@ def detie_timestamps(
     diffs = np.diff(T)
     pos   = diffs[diffs > 0]
 
-    if eps is None:
-        eps = max(1e-9, 0.1 * float(pos.min())) if pos.size else 1e-6
+    if resolution is None:
+        if pos.size >= 20:
+            resolution = float(np.percentile(pos, 5))
+        elif pos.size:
+            resolution = float(pos.min())
+        else:
+            resolution = 1e-6
+    resolution = max(float(resolution), 1e-6)
 
     adjusted  = 0
     run_start = 0
@@ -275,10 +313,15 @@ def detie_timestamps(
         run_len = run_end - run_start
         if run_len > 1:
             adjusted += run_len - 1
-            T[run_start:run_end] += eps * np.arange(run_len, dtype=float)
+            step = resolution
+            if run_end < n:
+                next_gap = float(T[run_end] - T[run_start])
+                if next_gap > 0.0 and run_len > 1:
+                    step = min(step, 0.49 * next_gap / float(run_len - 1))
+            T[run_start:run_end] += step * np.arange(run_len, dtype=float)
         run_start = run_end
 
-    return T, adjusted, float(eps)
+    return T, adjusted, float(resolution)
 
 
 def load_market_orders(
@@ -305,11 +348,21 @@ def load_market_orders(
     T  = np.sort(mo["Time"].values.astype(float))
     T  = T[np.isfinite(T)]
 
-    T_detied, n_adjusted, eps_used = detie_timestamps(T)
+    raw_diffs = np.diff(T)
+    raw_pos   = raw_diffs[raw_diffs > 0]
+    if raw_pos.size >= 20:
+        time_floor = float(np.percentile(raw_pos, 5))
+    elif raw_pos.size:
+        time_floor = float(raw_pos.min())
+    else:
+        time_floor = 1e-6
+    time_floor = max(time_floor, 1e-6)
+
+    T_detied, n_adjusted, eps_used = detie_timestamps(T, resolution=time_floor)
     if n_adjusted and not quiet:
         _log(
             f"[cyan]ℹ[/cyan] {ticker}: de-tied {n_adjusted} duplicated timestamps "
-            f"at ~{eps_used:.6g}s resolution.",
+            f"at ~{eps_used:.6g}s resolution-aware spacing.",
             force=True,
         )
 
@@ -317,6 +370,7 @@ def load_market_orders(
         "n_events" : int(T_detied.size),
         "n_adjusted": int(n_adjusted),
         "eps_used"  : float(eps_used),
+        "time_floor": float(time_floor),
         "date"      : str(df["Date"].iloc[0]),
         "data_path" : os.path.abspath(data_path),
     }
@@ -621,6 +675,42 @@ def _power_compensator_core(
     return Lambda
 
 
+@nb.njit(cache=_NB_CACHE, fastmath=_NB_FASTMATH)
+def _power_residuals_core(
+    T:   np.ndarray,
+    mu:  float,
+    n:   float,
+    tau: float,
+    eta: float,
+) -> np.ndarray:
+    """
+    Residual inter-arrivals without materialising the full compensator path.
+
+    This keeps the exact compensator arithmetic but avoids an extra O(N)
+    array when only first differences are needed.
+    """
+    N = T.shape[0]
+    if N < 2:
+        return np.empty(0, dtype=np.float64)
+
+    resid     = np.empty(N - 1, dtype=np.float64)
+    inv_tau   = 1.0 / tau
+    one_m_eta = 1.0 - eta
+    prev_acc  = mu * T[0]
+
+    for i in range(1, N):
+        ti  = T[i]
+        acc = mu * ti
+        for j in range(i):
+            x   = ti - T[j]
+            qx  = 1.0 + x * inv_tau
+            acc += n * (1.0 - qx ** one_m_eta)
+        resid[i - 1] = acc - prev_acc
+        prev_acc     = acc
+
+    return resid
+
+
 def power_compensator(T: np.ndarray, fit: PowerFitResult) -> np.ndarray:
     """Compensator values at event times for time-change diagnostics."""
     T = np.ascontiguousarray(T, dtype=np.float64)
@@ -633,8 +723,8 @@ def power_residuals(T: np.ndarray, fit: PowerFitResult) -> np.ndarray:
 
     If the model is correctly specified, these should be i.i.d. Exp(1).
     """
-    Lambda = power_compensator(T, fit)
-    resid  = np.diff(Lambda)
+    T     = np.ascontiguousarray(T, dtype=np.float64)
+    resid = _power_residuals_core(T, fit.mu, fit.n, fit.tau, fit.eta)
     return resid[np.isfinite(resid)]
 
 
@@ -693,9 +783,10 @@ def power_intensity_path(
     T:      np.ndarray,
     fit:    PowerFitResult,
     t_grid: np.ndarray,
+    assume_prepared: bool = False,
 ) -> np.ndarray:
     """Exact intensity path on a grid (Numba-parallel over grid points)."""
-    T      = np.ascontiguousarray(np.sort(T), dtype=np.float64)
+    T      = _prepare_sorted_times(T, assume_prepared=assume_prepared)
     t_grid = np.ascontiguousarray(t_grid, dtype=np.float64)
     return _power_intensity_path_core(T, t_grid, fit.mu, fit.n, fit.tau, fit.eta)
 
@@ -756,27 +847,68 @@ def _coarse_subsample(T: np.ndarray, target_n: int = 400, seed: int = 42) -> np.
     return T[idx]
 
 
-def _warmup_jit(T_sample: np.ndarray) -> None:
+def _select_top_seed_indices(nll_values: np.ndarray, n_candidates: int) -> np.ndarray:
     """
-    Trigger Numba compilation of all JIT-compiled functions before the
-    timed optimisation loop.  Pays the compile cost upfront rather than
-    contaminating the first seed evaluation — mirrors the warm-up pattern
-    in kernel_sum_exp.py.
+    Return the best finite seed indices in ascending score order.
+
+    The common case uses ``argpartition`` so we avoid fully sorting every
+    score, but we fall back to the previous ``argsort`` path when ties could
+    affect the chosen subset or its order.
     """
-    tiny      = T_sample[:min(10, T_sample.size)].copy()
-    tiny_grid = np.linspace(tiny[0], tiny[-1], 5)
+    finite_idx = np.flatnonzero(np.isfinite(nll_values))
+    if finite_idx.size == 0:
+        return np.empty(0, dtype=np.int64)
+
+    finite_scores = nll_values[finite_idx]
+    if finite_idx.size <= n_candidates:
+        return finite_idx[np.argsort(finite_scores)]
+
+    kth_score = np.partition(finite_scores, n_candidates - 1)[n_candidates - 1]
+    if np.count_nonzero(finite_scores == kth_score) > 1:
+        return finite_idx[np.argsort(finite_scores)[:n_candidates]]
+
+    part          = np.argpartition(finite_scores, n_candidates - 1)[:n_candidates]
+    selected_idx  = finite_idx[part]
+    selected_vals = finite_scores[part]
+
+    if np.unique(selected_vals).size != selected_vals.size:
+        return finite_idx[np.argsort(finite_scores)[:n_candidates]]
+
+    return selected_idx[np.argsort(selected_vals)]
+
+
+_JIT_WARMED = False
+
+
+def _ensure_jit_warmup() -> bool:
+    """
+    Trigger Numba compilation once per process for the exact power-law path.
+
+    Numba specialises on dtypes/shapes rather than array length, so a tiny
+    synthetic series is enough to warm the kernels used by every later fit.
+    """
+    global _JIT_WARMED
+    if _JIT_WARMED:
+        return False
+
+    tiny       = np.linspace(0.0, 1.0, 10, dtype=np.float64)
+    tiny_grid  = np.linspace(0.0, 1.0, 5, dtype=np.float64)
     dummy_seeds = np.array([[0.5, 0.5, 1.0, 2.0]], dtype=np.float64)
 
     _power_hawkes_nll_grad_core(tiny, 0.5, 0.5, 1.0, 2.0, 1.0, 0.95, 1.0)
     _rank_seeds_parallel(tiny, dummy_seeds, 1.0, 0.95, 1.0)
-    _power_compensator_core(tiny, 0.5, 0.5, 1.0, 2.0)
+    _power_residuals_core(tiny, 0.5, 0.5, 1.0, 2.0)
     _power_intensity_path_core(tiny, tiny_grid, 0.5, 0.5, 1.0, 2.0)
+    _JIT_WARMED = True
+    return True
 
 
 def fit_power_hawkes(
     T:         np.ndarray,
+    tau_lower: Optional[float] = None,
     label:     str  = "",
     quiet:     bool = False,
+    assume_prepared: bool = False,
     _plog            = None,
     _progress        = None,
 ) -> Optional[PowerFitResult]:
@@ -796,8 +928,7 @@ def fit_power_hawkes(
     Uses quiet= flag to suppress output when called from a progress bar,
     consistent with main.py's fit_hawkes() and experiment_2.py pattern.
     """
-    T = np.sort(np.ascontiguousarray(T, dtype=np.float64))
-    T = T[np.isfinite(T)]
+    T = _prepare_fit_times(T, assume_prepared=assume_prepared)
     if T.size < 20:
         _log(f"  [yellow]⚠[/yellow] Not enough events to fit power-law Hawkes ({label}).", force=not quiet)
         return None
@@ -810,20 +941,19 @@ def fit_power_hawkes(
         elif not quiet:
             _log(msg, force=True)
 
-    T = T - T[0]   # zero-index for numerical stability (same as main.py)
-
     # ── Data-driven bounds ──────────────────────────────────────────────
     diffs      = np.diff(T)
     pos_diffs  = diffs[diffs > 0]
-    mean_ia    = float(np.mean(diffs)) if diffs.size else 1.0
+    mean_ia    = float(np.mean(pos_diffs)) if pos_diffs.size else 1.0
 
     # tau lower bound: 5th percentile of positive inter-arrivals.
     # Prevents the kernel collapsing to a delta — excitation faster than
     # the data's own time resolution is unphysical.
-    if pos_diffs.size >= 20:
-        tau_lower = float(np.percentile(pos_diffs, 5))
-    else:
-        tau_lower = float(pos_diffs.min()) if pos_diffs.size else 0.01
+    if tau_lower is None:
+        if pos_diffs.size >= 20:
+            tau_lower = float(np.percentile(pos_diffs, 5))
+        else:
+            tau_lower = float(pos_diffs.min()) if pos_diffs.size else 0.01
     tau_lower = max(tau_lower, 1e-6)
 
     tau_upper = max(50.0 * mean_ia, 1.0)
@@ -838,9 +968,10 @@ def fit_power_hawkes(
 
     _emit(
         f"  [{label}] N={T.size:,}  τ_lo={tau_lower:.4g}  τ_hi={tau_upper:.4g}  "
-        f"n_cap={n_upper}  warming up Numba ({_NUM_THREADS} threads)..."
+        f"n_cap={n_upper}"
     )
-    _warmup_jit(T)
+    if _ensure_jit_warmup():
+        _emit(f"  [{label}] warming up Numba ({_NUM_THREADS} threads)...")
 
     # ── Parallel seed ranking on coarse subsample ────────────────────────
     ticker_seed = abs(hash(label)) % (2 ** 31)
@@ -868,12 +999,8 @@ def fit_power_hawkes(
 
     n_candidates = 10
     if np.any(finite_mask):
-        order = np.argsort(nll_values)
-        candidate_starts = [
-            seeds[idx].copy()
-            for idx in order
-            if finite_mask[idx]
-        ][:n_candidates]
+        top_idx = _select_top_seed_indices(nll_values, n_candidates)
+        candidate_starts = [seeds[idx].copy() for idx in top_idx]
     else:
         candidate_starts = [seeds[i] for i in range(min(n_candidates, len(seeds)))]
 
@@ -887,7 +1014,6 @@ def fit_power_hawkes(
     best_x   = None
     best_val = np.inf
     best_info: dict = {"warnflag": 1, "nit": -1, "task": "no optimization run"}
-    all_runs = []
 
     _opt_task = None
     if _progress is not None and HAVE_RICH:
@@ -920,7 +1046,6 @@ def fit_power_hawkes(
             pgtol=1e-8,
             maxiter=1000,
         )
-        all_runs.append((x_opt, float(f_opt), info))
         if np.isfinite(f_opt) and f_opt < best_val:
             best_x, best_val, best_info = x_opt, float(f_opt), info
         if _progress is not None and _opt_task is not None:
@@ -932,11 +1057,8 @@ def fit_power_hawkes(
     # Fallback: if no run converged, take best finite result — mirrors
     # main.py's `if best_res is None: finite = [r for r in all_res if ...]`
     if best_x is None:
-        finite_runs = [(x, v, i) for x, v, i in all_runs if np.isfinite(v)]
-        if not finite_runs:
             _log(f"  [yellow]⚠[/yellow] Power-law Hawkes optimisation failed ({label}).", force=not quiet)
             return None
-        best_x, best_val, best_info = min(finite_runs, key=lambda t: t[1])
 
     mu_s1, n_s1, tau_s1, eta_s1 = map(float, best_x)
     conv_s1 = int(best_info.get("warnflag", 1)) == 0
@@ -972,12 +1094,8 @@ def fit_power_hawkes(
         nll_pen    = _rank_seeds_parallel(coarse_T, seeds, tau_lower, n_upper, pen_weight)
         finite_pen = np.isfinite(nll_pen)
         if np.any(finite_pen):
-            order_pen  = np.argsort(nll_pen)
-            pen_starts = [
-                seeds[idx].copy()
-                for idx in order_pen
-                if finite_pen[idx]
-            ][:n_candidates]
+            top_pen_idx = _select_top_seed_indices(nll_pen, n_candidates)
+            pen_starts = [seeds[idx].copy() for idx in top_pen_idx]
         else:
             pen_starts = candidate_starts
 
@@ -1051,13 +1169,10 @@ def fit_power_hawkes(
 
     mu, n, tau, eta = map(float, best_x)
 
-    # Final NLL always evaluated without penalty
-    final_nll, _ = power_hawkes_nll_grad(best_x, T, tau_lower, n_upper, 0.0)
-
     success = int(best_info.get("warnflag", 1)) == 0
     result  = PowerFitResult(
         mu=mu, n=n, tau=tau, eta=eta,
-        nll=float(final_nll),
+        nll=float(best_val),
         success=success,
         nit=int(best_info.get("nit", -1)),
         message=str(best_info.get("task", "")),
@@ -1070,7 +1185,9 @@ def fit_power_hawkes(
         )
 
     # Goodness-of-fit via Papangelou time-change theorem
-    residuals = power_residuals(T, result)
+    residuals = _power_residuals_core(T, result.mu, result.n, result.tau, result.eta)
+    residuals = residuals[np.isfinite(residuals)]
+    result.residuals = residuals
     if residuals.size >= 5 and np.all(np.isfinite(residuals)):
         ks = kstest(residuals, "expon")
         result.ks_stat   = float(ks.statistic)
@@ -1096,6 +1213,7 @@ def plot_power_hawkes_intensity(
     fit:       PowerFitResult,
     ticker:    str = DEFAULT_TICKER,
     plots_dir: Optional[str] = None,
+    assume_prepared: bool = False,
 ) -> str:
     """
     Plot the fitted power-law Hawkes intensity λ(t) against the raw event times.
@@ -1107,26 +1225,55 @@ def plot_power_hawkes_intensity(
     if plots_dir is None:
         plots_dir = _plots_dir(ticker)
 
-    T      = np.sort(np.ascontiguousarray(T, dtype=np.float64))
-    t_grid = np.linspace(T[0], T[-1], 2000)
-    lam    = power_intensity_path(T, fit, t_grid)
+    T = _prepare_sorted_times(T, assume_prepared=assume_prepared)
+    if T.size < 2:
+        raise ValueError("Need at least two events to plot intensity.")
 
-    fig, ax = plt.subplots(figsize=(12, 4))
-    ax.plot(t_grid, lam, color=base.COLORS.get(ticker, "steelblue"),
-            lw=1.2, label="power-law λ(t)")
-    ax.axhline(fit.mu, color="red", ls="--", lw=1,
-               label=f"baseline μ = {fit.mu:.4f}")
-    # Rug plot of event times (see reference §2.5)
-    ax.plot(T, np.zeros_like(T) - 0.02 * lam.max(), "|",
-            color="black", alpha=0.3, ms=6)
-    ax.set_xlabel("Time (s from first event)")
-    ax.set_ylabel("Intensity λ(t)")
-    ax.set_title(
+    t_stop = np.nextafter(T[-1], T[0])
+    t_grid = np.linspace(T[0], t_stop, 2500)
+    lam    = power_intensity_path(T, fit, t_grid, assume_prepared=True)
+
+    clr        = base.COLORS.get(ticker, "steelblue")
+    lam_peak   = float(np.max(lam))
+    lam_typical = float(np.quantile(lam, 0.995)) if lam.size >= 20 else lam_peak
+    lam_typical = max(lam_typical, fit.mu * 3.0, 1e-6)
+    rug_y      = -0.05 * lam_typical
+    full_lo    = max(min(float(np.min(lam[lam > 0])) if np.any(lam > 0) else fit.mu, fit.mu), 1e-6)
+    full_hi    = max(lam_peak * 1.05, full_lo * 10.0)
+
+    fig, (ax1, ax2) = plt.subplots(
+        2, 1, figsize=(12, 6), sharex=True,
+        gridspec_kw={"height_ratios": [3.2, 1.5]},
+    )
+
+    ax1.plot(t_grid, lam, color=clr, lw=1.2, label="power-law λ(t)")
+    ax1.axhline(fit.mu, color="red", ls="--", lw=1,
+                label=f"baseline μ = {fit.mu:.4f}")
+    ax1.plot(T, np.full_like(T, rug_y), "|", color="black", alpha=0.25, ms=6)
+    ax1.set_ylabel("Intensity λ(t)")
+    ax1.set_ylim(rug_y * 1.6, lam_typical * 1.05)
+    ax1.set_title(
         f"{ticker} — Power-law Hawkes Intensity  "
         f"(n = {fit.n:.3f}, η = {fit.eta:.3f})",
         fontweight="bold",
     )
-    ax.legend(fontsize=9)
+    if lam_peak > lam_typical * 1.1:
+        ax1.text(
+            0.99, 0.96,
+            f"Typical-range view capped at {lam_typical:.2f}\nfull max = {lam_peak:.2f}",
+            transform=ax1.transAxes,
+            ha="right", va="top", fontsize=9,
+            bbox=dict(boxstyle="round,pad=0.25", facecolor="white", alpha=0.85, edgecolor="0.8"),
+        )
+    ax1.legend(fontsize=9, loc="upper left")
+
+    ax2.plot(t_grid, lam, color=clr, lw=1.0)
+    ax2.axhline(fit.mu, color="red", ls="--", lw=1)
+    ax2.set_yscale("log")
+    ax2.set_ylim(full_lo, full_hi)
+    ax2.set_xlabel("Time (s from first event)")
+    ax2.set_ylabel("λ(t), log")
+    ax2.set_title("Full range (log scale)", fontsize=10)
 
     plt.tight_layout()
     fname = os.path.join(plots_dir, f"power_hawkes_intensity_{ticker}.png")
@@ -1141,6 +1288,7 @@ def plot_power_residual_qqplot(
     fit:       PowerFitResult,
     ticker:    str = DEFAULT_TICKER,
     plots_dir: Optional[str] = None,
+    assume_prepared: bool = False,
 ) -> str:
     """
     Goodness-of-fit QQ plot and residual histogram.
@@ -1151,7 +1299,9 @@ def plot_power_residual_qqplot(
     if plots_dir is None:
         plots_dir = _plots_dir(ticker)
 
-    residuals = power_residuals(T, fit)
+    residuals = fit.residuals
+    if residuals is None:
+        residuals = power_residuals(T, fit)
     if residuals.size == 0:
         raise ValueError("No residuals available for QQ plot.")
 
@@ -1162,7 +1312,14 @@ def plot_power_residual_qqplot(
     quantiles_th  = -np.log(1.0 - probs)
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
-    fig.suptitle(f"{ticker} — Power-law Hawkes Goodness-of-Fit", fontweight="bold")
+    if fit.ks_stat is not None and fit.ks_pvalue is not None:
+        fig.suptitle(
+            f"{ticker} — Power-law Hawkes Goodness-of-Fit  "
+            f"(KS = {fit.ks_stat:.3f}, p = {fit.ks_pvalue:.3g})",
+            fontweight="bold",
+        )
+    else:
+        fig.suptitle(f"{ticker} — Power-law Hawkes Goodness-of-Fit", fontweight="bold")
 
     ax1.plot(quantiles_th, quantiles_emp, ".", alpha=0.45,
              color=base.COLORS.get(ticker, "steelblue"), ms=3)
@@ -1412,7 +1569,7 @@ def run_powerlaw_analysis(
         raw_exp_ll = float(base.hawkes_loglik(
             np.array([exp_mu, exp_alpha, exp_beta], dtype=float), T
         ))
-        exp_nll = -raw_exp_ll if raw_exp_ll < 0 else raw_exp_ll
+        exp_nll = raw_exp_ll
         exp_fit = ExpFitSummary(mu=exp_mu, alpha=exp_alpha, beta=exp_beta, nll=exp_nll)
         t_exp   = time.perf_counter() - t_exp
         _plog(
@@ -1428,8 +1585,8 @@ def run_powerlaw_analysis(
                         status="ranking seeds...")
         t_pow   = time.perf_counter()
         pow_fit = fit_power_hawkes(
-            T, label=f"{ticker} market orders", quiet=True,
-            _plog=_plog, _progress=progress,
+            T, tau_lower=meta.get("time_floor"), label=f"{ticker} market orders", quiet=True,
+            assume_prepared=True, _plog=_plog, _progress=progress,
         )
         if pow_fit is None:
             raise RuntimeError("Power-law Hawkes fit failed.")
@@ -1452,9 +1609,9 @@ def run_powerlaw_analysis(
                         status="saving plots...")
         t_plot = time.perf_counter()
         intensity_path = plot_power_hawkes_intensity(
-            T, pow_fit, ticker=ticker, plots_dir=plots_dir)
+            T, pow_fit, ticker=ticker, plots_dir=plots_dir, assume_prepared=True)
         qq_path = plot_power_residual_qqplot(
-            T, pow_fit, ticker=ticker, plots_dir=plots_dir)
+            T, pow_fit, ticker=ticker, plots_dir=plots_dir, assume_prepared=True)
         cmp_path = plot_exp_vs_power_comparison(
             exp_fit, pow_fit, ticker=ticker, plots_dir=plots_dir)
         t_plot = time.perf_counter() - t_plot
@@ -1788,7 +1945,7 @@ def run_all_tickers(
         raw_exp_ll = float(base.hawkes_loglik(
             np.array([exp_mu, exp_alpha, exp_beta], dtype=float), T
         ))
-        exp_nll = -raw_exp_ll if raw_exp_ll < 0 else raw_exp_ll
+        exp_nll = raw_exp_ll
         exp_fit = ExpFitSummary(mu=exp_mu, alpha=exp_alpha, beta=exp_beta, nll=exp_nll)
         t_exp   = time.perf_counter() - t_exp
         _plog(
@@ -1804,8 +1961,8 @@ def run_all_tickers(
                         status="ranking seeds...")
         t_pow   = time.perf_counter()
         pow_fit = fit_power_hawkes(
-            T, label=f"{ticker} market orders", quiet=True,
-            _plog=_plog, _progress=progress,
+            T, tau_lower=meta.get("time_floor"), label=f"{ticker} market orders", quiet=True,
+            assume_prepared=True, _plog=_plog, _progress=progress,
         )
         if pow_fit is None:
             _plog(f"  [yellow]⚠[/yellow] [{ticker}] pow fit failed — skipping.")
@@ -1829,8 +1986,12 @@ def run_all_tickers(
                         description=f"  [cyan]{ticker}[/cyan] plots",
                         status="saving plots...")
         t_plot = time.perf_counter()
-        plot_power_hawkes_intensity(T, pow_fit, ticker=ticker, plots_dir=pdir)
-        plot_power_residual_qqplot(T, pow_fit, ticker=ticker, plots_dir=pdir)
+        plot_power_hawkes_intensity(
+            T, pow_fit, ticker=ticker, plots_dir=pdir, assume_prepared=True
+        )
+        plot_power_residual_qqplot(
+            T, pow_fit, ticker=ticker, plots_dir=pdir, assume_prepared=True
+        )
         plot_exp_vs_power_comparison(exp_fit, pow_fit, ticker=ticker, plots_dir=pdir)
         t_plot = time.perf_counter() - t_plot
         _advance("plots ✓", "3 figures saved")
