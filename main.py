@@ -33,6 +33,7 @@ import matplotlib.gridspec as gridspec
 import matplotlib.ticker as mticker
 from matplotlib.patches import FancyArrowPatch
 from scipy.optimize import minimize
+from scipy.stats import ks_1samp, expon
 from statsmodels.tsa.api import VAR
 try:
     from rich.console import Console
@@ -938,7 +939,53 @@ def _make_inits(T, n_starts=8):
             ]))
     return inits
 
-def fit_hawkes(T, label="", quiet=False):
+
+_HAWKES_WORKER_T = np.empty(0, dtype=float)
+
+
+def _pool_initializer(T):
+    """
+    Seed a worker process with one ticker's event times.
+
+    Shared pools can reuse this so each optimisation start only carries the
+    parameter tuple, not the full timestamp array.
+    """
+    global _HAWKES_WORKER_T
+    _HAWKES_WORKER_T = np.ascontiguousarray(T, dtype=float)
+
+
+def _solve_hawkes_start(T, init, bounds):
+    """Run one exponential Hawkes L-BFGS-B start and return a compact summary."""
+    res = minimize(
+        hawkes_loglik_grad, init, args=(T,),
+        method="L-BFGS-B",
+        jac=True,
+        bounds=bounds,
+        options={"ftol": 1e-12, "gtol": 1e-8, "maxiter": 500},
+    )
+    return np.asarray(res.x, dtype=float), float(res.fun), bool(res.success)
+
+
+def _run_one_hawkes_start(args):
+    """Worker entrypoint for one exponential Hawkes start on shared worker data."""
+    T = _HAWKES_WORKER_T
+    if T.size == 0:
+        raise RuntimeError("Exponential Hawkes worker pool was not initialised with T.")
+
+    init, bounds = args
+    return _solve_hawkes_start(T, init, bounds)
+
+def fit_hawkes(T, label="", quiet=False, return_nll=False, _pool=None):
+    """Fit exponential Hawkes model by MLE.
+
+    Parameters
+    ----------
+    return_nll : bool
+        If True, return ``(mu, alpha, beta, nll)`` instead of ``(mu, alpha, beta)``.
+        Avoids a redundant ``hawkes_loglik`` call in callers that need the NLL.
+    _pool : executor or None
+        Optional shared worker pool already initialised with ``_pool_initializer``.
+    """
     T = np.sort(np.asarray(T, dtype=float))
     T = T - T[0]                    # zero-index time (important for numerical stability)
     T = T[np.isfinite(T)]
@@ -957,29 +1004,33 @@ def fit_hawkes(T, label="", quiet=False):
         (1e-6, alpha_max),   # alpha
         (1e-3, beta_max),    # beta
     ]
+    starts = [np.asarray(init, dtype=float) for init in _make_inits(T)]
     all_res = []
-    for init in _make_inits(T):
-        res = minimize(
-            hawkes_loglik_grad, init, args=(T,),
-            method="L-BFGS-B",
-            jac=True,
-            bounds=bounds,
-            options={"ftol": 1e-12, "gtol": 1e-8, "maxiter": 500},
-        )
-        all_res.append(res)
-        if res.success and res.fun < best_val:
-            best_val = res.fun
-            best_res = res
+
+    if _pool is not None:
+        args_list = [(init, bounds) for init in starts]
+        for x_opt, f_opt, success in _pool.map(_run_one_hawkes_start, args_list):
+            all_res.append((x_opt, f_opt, success))
+            if success and np.isfinite(f_opt) and f_opt < best_val:
+                best_val = f_opt
+                best_res = x_opt
+    else:
+        for init in starts:
+            x_opt, f_opt, success = _solve_hawkes_start(T, init, bounds)
+            all_res.append((x_opt, f_opt, success))
+            if success and np.isfinite(f_opt) and f_opt < best_val:
+                best_val = f_opt
+                best_res = x_opt
 
     # Fallback: if no converged run, keep the best finite objective from same runs.
     if best_res is None:
-        finite = [r for r in all_res if np.isfinite(r.fun)]
+        finite = [(x_opt, f_opt) for x_opt, f_opt, _ in all_res if np.isfinite(f_opt)]
         if not finite:
             _log(f"  [yellow]⚠[/yellow] Hawkes optimisation failed ({label}).", force=not quiet)
             return None
-        best_res = min(finite, key=lambda r: r.fun)
+        best_res, best_val = min(finite, key=lambda item: item[1])
 
-    mu, alpha, beta = best_res.x
+    mu, alpha, beta = map(float, best_res)
     br = alpha / beta
 
     if not quiet:
@@ -995,6 +1046,9 @@ def fit_hawkes(T, label="", quiet=False):
             _log(f"  -> ~{br * 100:.1f}% of events are triggered by previous events.", force=True)
         _log(f"{'-' * 50}\n", force=True)
 
+    nll = float(best_val)
+    if return_nll:
+        return mu, alpha, beta, nll
     return mu, alpha, beta
 
 def plot_hawkes_intensity(T, mu, alpha, beta, ticker, n_grid=2000, quiet=False):
@@ -1047,28 +1101,39 @@ def plot_residual_qqplot(T, mu, alpha, beta, ticker, quiet=False):
     Goodness-of-fit via the time-change theorem:
     The compensated times  Λ(tᵢ) = ∫₀^{tᵢ} λ(t) dt  should be
     i.i.d. Exponential(1) if the model is correct.
+
+    Returns
+    -------
+    ks_stat : float   Kolmogorov–Smirnov statistic against Exp(1)
     """
     T = np.sort(np.asarray(T, dtype=float))
     n = len(T)
 
-    # Compensator increments (recursive)
-    A      = 0.0
-    Lambda = np.zeros(n)
-    for i in range(n):
-        if i > 0:
-            dt = T[i] - T[i - 1]
-            A  = A * np.exp(-beta * dt)
-            Lambda[i] = Lambda[i - 1] + mu * dt + (alpha / beta) * (1 - np.exp(-beta * dt)) * A
-        A += 1.0
+    # Compensator increments (corrected recursion)
+    # Uses (1 + A) BEFORE the decay update, so that event t_{i-1}
+    # contributes to the excitation integral over [t_{i-1}, t_i].
+    residuals = np.empty(n - 1)
+    A = 0.0
+    for i in range(1, n):
+        dt = T[i] - T[i - 1]
+        e  = np.exp(-beta * dt)
+        residuals[i - 1] = mu * dt + (alpha / beta) * (1 - e) * (1.0 + A)
+        A = e * (A + 1.0)
 
-    residuals = np.diff(Lambda)   # should be ~Exp(1)
+    # KS test against Exp(1)
+    res_pos = residuals[residuals > 0]
+    ks_stat = float("nan")
+    ks_pval = float("nan")
+    if len(res_pos) >= 5:
+        ks_stat, ks_pval = ks_1samp(res_pos, expon.cdf)
 
     # Q-Q plot against Exp(1)
     quantiles_emp = np.sort(residuals)
     quantiles_th  = -np.log(1 - np.linspace(0.01, 0.99, len(residuals)))
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
-    fig.suptitle(f"{ticker} — Hawkes Goodness-of-Fit", fontweight="bold")
+    ks_label = f"  (KS = {ks_stat:.3f})" if np.isfinite(ks_stat) else ""
+    fig.suptitle(f"{ticker} — Hawkes Goodness-of-Fit{ks_label}", fontweight="bold")
 
     ax1.plot(quantiles_th, quantiles_emp, ".", alpha=0.4,
              color=COLORS.get(ticker, "steelblue"), ms=3)
@@ -1093,6 +1158,8 @@ def plot_residual_qqplot(T, mu, alpha, beta, ticker, quiet=False):
     plt.savefig(fname, dpi=300, bbox_inches="tight")
     plt.close()
     _log(f"Saved: {fname}")
+
+    return ks_stat
 
 
 # =============================================================================
@@ -1130,6 +1197,7 @@ def run_pipeline(tickers=None, start=START_DATE, end=END_DATE, data_path=DATA_PA
 
     summaries = {}
     hawkes_params = {}
+    hawkes_ks = {}
 
     def _run_one_ticker(ticker, progress=None, stage_task=None):
         stage_names = [
@@ -1182,11 +1250,13 @@ def run_pipeline(tickers=None, start=START_DATE, end=END_DATE, data_path=DATA_PA
                 mu, alpha, beta = params
                 hawkes_params[ticker] = params
                 plot_hawkes_intensity(T, mu, alpha, beta, ticker, quiet=True)
-                plot_residual_qqplot(T, mu, alpha, beta, ticker, quiet=True)
+                ks = plot_residual_qqplot(T, mu, alpha, beta, ticker, quiet=True)
+                hawkes_ks[ticker] = ks
                 if HAVE_RICH and console is not None:
+                    ks_str = f"  KS={ks:.3f}" if np.isfinite(ks) else ""
                     _log(
                         f"  [bold]{ticker}[/bold]  VAR lag={var_res.k_ar if var_res is not None else 'n/a'}  "
-                        f"|  Hawkes BR={alpha/beta:.3f}",
+                        f"|  Hawkes BR={alpha/beta:.3f}{ks_str}",
                         force=True,
                     )
         else:
@@ -1237,30 +1307,46 @@ def run_pipeline(tickers=None, start=START_DATE, end=END_DATE, data_path=DATA_PA
         tks = list(hawkes_params.keys())
         mu_vals = [hawkes_params[t][0] for t in tks]
         br_vals = [hawkes_params[t][1] / hawkes_params[t][2] for t in tks]
+        ks_vals = [hawkes_ks.get(t, float("nan")) for t in tks]
+        has_ks  = any(np.isfinite(k) for k in ks_vals)
 
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 4))
+        n_panels = 3 if has_ks else 2
+        fig, axes = plt.subplots(1, n_panels, figsize=(5 * n_panels + 1, 4))
         fig.suptitle("Hawkes Parameters — Cross-stock Comparison", fontweight="bold")
 
+        ax1 = axes[0]
         ax1.bar(tks, mu_vals, color=[COLORS.get(t, "grey") for t in tks])
         ax1.set_title("Background Rate μ (events/sec)")
         ax1.set_ylabel("μ")
 
+        ax2 = axes[1]
         ax2.bar(tks, br_vals, color=[COLORS.get(t, "grey") for t in tks])
         ax2.axhline(1, color="red", ls="--", lw=1, label="Stationarity boundary")
         ax2.set_title("Branching Ratio α/β")
         ax2.set_ylabel("α/β")
         ax2.legend(fontsize=9)
 
-        for ax in [ax1, ax2]:
+        annotate_axes = [ax1, ax2]
+
+        if has_ks:
+            ax3 = axes[2]
+            ax3.bar(tks, ks_vals, color=[COLORS.get(t, "grey") for t in tks])
+            ax3.set_title("KS Statistic vs Exp(1)")
+            ax3.set_ylabel("KS stat (lower = better)")
+            annotate_axes.append(ax3)
+
+        for ax in annotate_axes:
             for bar in ax.patches:
-                ax.text(
-                    bar.get_x() + bar.get_width() / 2,
-                    bar.get_height() * 1.01,
-                    f"{bar.get_height():.3f}",
-                    ha="center",
-                    va="bottom",
-                    fontsize=8,
-                )
+                h = bar.get_height()
+                if np.isfinite(h):
+                    ax.text(
+                        bar.get_x() + bar.get_width() / 2,
+                        h * 1.01,
+                        f"{h:.3f}",
+                        ha="center",
+                        va="bottom",
+                        fontsize=8,
+                    )
 
         plt.tight_layout()
         fname = os.path.join(PLOTS_DIR, "hawkes_comparison.png")
@@ -1278,7 +1364,7 @@ def run_pipeline(tickers=None, start=START_DATE, end=END_DATE, data_path=DATA_PA
     else:
         _log(f"\nPipeline complete ({elapsed:.1f}s).", force=True)
 
-    return summaries, hawkes_params
+    return summaries, hawkes_params, hawkes_ks
 # =============================================================================
 # SECTION 7 — STUDENT EXPERIMENTS
 # =============================================================================
@@ -1336,10 +1422,10 @@ if __name__ == "__main__":
     #   python main.py
     #
     # or, to run only a subset of stocks:
-    #   summaries, params = run_pipeline(
+    #   summaries, params, ks = run_pipeline(
     #       tickers=["AMZN", "AAPL"],
     #       data_path="my_data/"
     #   )
     # ──────────────────────────────────────────────────────────────────────
 
-    summaries, hawkes_params = run_pipeline()
+    summaries, hawkes_params, hawkes_ks = run_pipeline()
