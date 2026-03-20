@@ -116,6 +116,14 @@ MAX_TICKER_WORKERS = max(1, min(2, _CPU // max(N_WORKERS, 1)))
 RANDOM_SEED = 42
 
 
+def _stable_ticker_seed(ticker):
+    """Deterministic per-ticker seed derived from the base seed and ticker."""
+    seed = RANDOM_SEED
+    for ch in ticker.upper():
+        seed = (seed * 131 + ord(ch)) % (2 ** 32)
+    return seed
+
+
 # ===========================================================================
 # Numba-JIT Mittag-Leffler kernel
 # ===========================================================================
@@ -551,7 +559,7 @@ def _compute_ticker(df, ticker, pool, progress=None, stage_task=None,
         ia_max = ia_min * 1.0001
 
     # Per-ticker Sobol seed: deterministic but distinct per ticker.
-    ticker_seed = RANDOM_SEED ^ (hash(ticker) & 0xFFFF)
+    ticker_seed = _stable_ticker_seed(ticker)
 
     def _advance(label):
         if progress is not None and stage_task is not None:
