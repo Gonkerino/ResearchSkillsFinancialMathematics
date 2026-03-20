@@ -784,6 +784,65 @@ def _compute_ticker(df, ticker, pool, progress=None, stage_task=None,
     fname = os.path.join(PLOTS_DIR, f"stylised_facts_multi_dist_{ticker}.png")
     plt.savefig(fname, dpi=300, bbox_inches="tight")
     plt.close()
+
+    # ── Save individual panels ────────────────────────────────────────
+    # Panel 1: IAT density only
+    fig1, ax1s = plt.subplots(1, 1, figsize=(16, 5))
+    fig1.suptitle(f"{ticker} — Market-order Inter-arrival Times  ({df.Date.iloc[0]})",
+                  fontsize=13, fontweight="bold")
+    ax1s.hist(inter_arrival, bins=log_bins, density=True,
+              color=COLORS.get(ticker, "steelblue"), alpha=0.7, edgecolor="white")
+    ax1s.plot(xs, ys_weibull,   color="#d62728", ls="--",  lw=2.0,
+              label=f"Weibull(k={k:.2f}, lam={lam:.2f})")
+    ax1s.plot(xs, ys_gamma,     color="#9467bd", ls="-.",  lw=1.8,
+              label=f"Gamma(a={a_g:.2f}, th={scale_g:.2f})")
+    ax1s.plot(xs, ys_lognorm,   color="#2ca02c", ls=":",   lw=2.2,
+              label=f"Lognormal(s={s_l:.2f}, sc={scale_l:.2f})")
+    ax1s.plot(xs, ys_exp,       color="#ff7f0e", ls="-",   lw=1.8,
+              label=f"Exponential(lam={1.0/scale_e:.2f})")
+    ax1s.plot(xs, ys_invgauss,  color="#1f77b4", ls="--",  lw=1.6,
+              label=f"InvGaussian(shape={mu_ig:.2f}, sc={scale_ig:.2f})")
+    ax1s.plot(xs, ys_fisk,      color="#8c564b", ls="-.",  lw=1.6,
+              label=f"LogLogistic(c={c_fl:.2f}, sc={scale_fl:.2f})")
+    ax1s.plot(xs, ys_burr12,    color="#e377c2", ls=":",   lw=1.8,
+              label=f"Burr12(c={c_b:.2f}, d={d_b:.2f})")
+    ax1s.plot(xs, ys_genpareto, color="#7f7f7f", ls="-",   lw=1.6,
+              label=f"GenPareto(c={c_gp:.2f}, sc={scale_gp:.2f})")
+    ax1s.plot(xs, ys_gengamma,  color="#bcbd22", ls="--",  lw=1.6,
+              label=f"GenGamma(a={a_gg:.2f}, c={c_gg:.2f})")
+    ax1s.plot(xs, ys_lomax,     color="#17becf", ls="-",   lw=2.0,
+              label=f"Lomax(c={c_lx:.2f}, sc={scale_lx:.2f}) [power-law]")
+    ax1s.plot(xs, ys_ml, color="#e41a1c", ls="-", lw=2.2, label=ml_label)
+    ax1s.set_xscale("log"); ax1s.set_yscale("log")
+    ax1s.set_xlabel("Inter-arrival time (s) - log"); ax1s.set_ylabel("Density")
+    ax1s.legend(fontsize=9)
+    ax1s.set_xlim(left=1e-6, right=5e2); ax1s.set_ylim(bottom=1e-5, top=1e4)
+    plt.tight_layout()
+    fname_iat = os.path.join(PLOTS_DIR, f"iat_density_{ticker}.png")
+    plt.savefig(fname_iat, dpi=300, bbox_inches="tight")
+    plt.close()
+
+    # Panel 2: ACF only
+    fig2, ax2s = plt.subplots(1, 1, figsize=(16, 4))
+    fig2.suptitle(f"{ticker} — Signed Trade-size Autocorrelation  ({df.Date.iloc[0]})",
+                  fontsize=13, fontweight="bold")
+    if max_lag >= 1:
+        ax2s.bar(lags, acf_arr, color=COLORS.get(ticker, "steelblue"), alpha=0.8)
+        ax2s.axhline(0, color="black", lw=0.8)
+        ci = 1.96 / np.sqrt(len(X))
+        ax2s.axhline( ci, color="red", ls="--", lw=1, label="95% CI (i.i.d.)")
+        ax2s.axhline(-ci, color="red", ls="--", lw=1)
+        ax2s.legend(fontsize=9)
+    else:
+        ax2s.text(0.5, 0.5, "Not enough data for ACF", ha="center", va="center",
+                  transform=ax2s.transAxes)
+        ax2s.axhline(0, color="black", lw=0.8)
+    ax2s.set_xlabel("Lag"); ax2s.set_ylabel("Autocorrelation")
+    plt.tight_layout()
+    fname_acf = os.path.join(PLOTS_DIR, f"acf_{ticker}.png")
+    plt.savefig(fname_acf, dpi=300, bbox_inches="tight")
+    plt.close()
+
     _advance("plot ✓")
 
     # ------------------------------------------------------------------
@@ -1274,7 +1333,7 @@ def run_stylised_facts_multi_dist(tickers=None, start=START_DATE, end=END_DATE,
     )
 
     stage_tasks = {
-        t: progress.add_task(t, total=6, status="waiting...", visible=True)
+        t: progress.add_task(t, total=6, status="waiting...", visible=False)
         for t in tickers
     }
     # Per-ticker grid sub-bar so concurrent tickers don't fight over one bar.
@@ -1288,7 +1347,7 @@ def run_stylised_facts_multi_dist(tickers=None, start=START_DATE, end=END_DATE,
 
     def _load_and_fit(ticker):
         """Thread worker: load, validate, spawn process pool, fit, collect result."""
-        progress.update(stage_tasks[ticker], status="loading...")
+        progress.update(stage_tasks[ticker], status="loading...", visible=True)
 
         # ---- load ----
         try:
