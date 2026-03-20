@@ -833,6 +833,45 @@ def compute_stylised_facts(df, ticker, quiet=False):
     plt.close()
     _log(f"Saved: {fname}")
 
+    # ── Save individual panels ────────────────────────────────────────────
+    # Panel 1: IAT density only
+    fig1, ax1s = plt.subplots(1, 1, figsize=(16, 5))
+    fig1.suptitle(f"{ticker} — Market-order Inter-arrival Times  ({df.Date.iloc[0]})",
+                  fontsize=13, fontweight="bold")
+    log_bins = np.logspace(np.log10(inter_arrival[inter_arrival > 0].min()),
+                           np.log10(inter_arrival.max()), 60)
+    ax1s.hist(inter_arrival, bins=log_bins, density=True,
+              color=COLORS.get(ticker, "steelblue"), alpha=0.7, edgecolor="white")
+    lam  = 1 / inter_arrival.mean()
+    xs   = np.linspace(0, np.percentile(inter_arrival, 97), 200)
+    ax1s.plot(xs, lam * np.exp(-lam * xs), "r--", lw=2, label=f"Exp(λ={lam:.2f})")
+    ax1s.set_xscale('log'); ax1s.set_yscale('log')
+    ax1s.set_xlabel("Inter-arrival time (s) - log"); ax1s.set_ylabel("Density")
+    ax1s.legend()
+    ax1s.set_xlim(left=1e-6, right=5e2); ax1s.set_ylim(bottom=1e-5, top=1e4)
+    plt.tight_layout()
+    fname_iat = os.path.join(PLOTS_DIR, f"iat_density_{ticker}.png")
+    plt.savefig(fname_iat, dpi=300, bbox_inches="tight")
+    plt.close()
+    _log(f"Saved: {fname_iat}")
+
+    # Panel 2: ACF only
+    fig2, ax2s = plt.subplots(1, 1, figsize=(16, 4))
+    fig2.suptitle(f"{ticker} — Signed Trade-size Autocorrelation  ({df.Date.iloc[0]})",
+                  fontsize=13, fontweight="bold")
+    ax2s.bar(lags, acf, color=COLORS.get(ticker, "steelblue"), alpha=0.8)
+    ax2s.axhline(0, color="black", lw=0.8)
+    ci = 1.96 / np.sqrt(len(X))
+    ax2s.axhline( ci, color="red", ls="--", lw=1, label="95% CI (i.i.d.)")
+    ax2s.axhline(-ci, color="red", ls="--", lw=1)
+    ax2s.set_xlabel("Lag"); ax2s.set_ylabel("Autocorrelation")
+    ax2s.legend(fontsize=9)
+    plt.tight_layout()
+    fname_acf = os.path.join(PLOTS_DIR, f"acf_{ticker}.png")
+    plt.savefig(fname_acf, dpi=300, bbox_inches="tight")
+    plt.close()
+    _log(f"Saved: {fname_acf}")
+
 
 # =============================================================================
 # SECTION 4 — VAR MEMORY TEST
