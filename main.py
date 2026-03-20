@@ -582,6 +582,61 @@ def plot_midprice_and_spread(df, ticker):
     plt.close()
     _log(f"Saved: {fname}")
 
+def plot_midprice_all(summaries):
+    """
+    Combined mid-price and spread plot for all tickers on a shared time axis.
+    Two rows of subplots: top row = mid-price, bottom row = bid-ask spread.
+    """
+    tickers = list(summaries.keys())
+    n = len(tickers)
+    if n == 0:
+        return
+
+    fig, axes = plt.subplots(2, n, figsize=(4 * n, 6), sharex=False)
+    if n == 1:
+        axes = axes.reshape(2, 1)
+
+    fig.suptitle(
+        "Mid-price and Quoted Spread — All Tickers (2012-06-21, 10:30–15:00 ET)",
+        fontweight="bold", fontsize=12,
+    )
+
+    for j, ticker in enumerate(tickers):
+        df = summaries[ticker].copy()
+        df["mid"]    = (df["Ask Price 1"] + df["Bid Price 1"]) / 2
+        df["spread"] = (df["Ask Price 1"] - df["Bid Price 1"]) * 100
+
+        thin = max(1, len(df) // 500)
+        df_thin = df.iloc[::thin]
+
+        color = COLORS.get(ticker, "steelblue")
+
+        ax_top = axes[0, j]
+        ax_top.plot(df_thin["TimeSinceOpen"] / 3600, df_thin["mid"],
+                    color=color, lw=1.0)
+        ax_top.set_title(ticker, fontweight="bold", color=color)
+        if j == 0:
+            ax_top.set_ylabel("Mid-price ($)")
+        ax_top.tick_params(labelbottom=False)
+
+        ax_bot = axes[1, j]
+        ax_bot.fill_between(df_thin["TimeSinceOpen"] / 3600,
+                            df_thin["spread"], alpha=0.35, color=color)
+        ax_bot.plot(df_thin["TimeSinceOpen"] / 3600, df_thin["spread"],
+                    color=color, lw=0.8)
+        avg = df["spread"].mean()
+        ax_bot.axhline(avg, color="red", ls="--", lw=0.8,
+                       label=f"Mean={avg:.2f}¢")
+        ax_bot.legend(fontsize=7)
+        ax_bot.set_xlabel("Hours from open")
+        if j == 0:
+            ax_bot.set_ylabel("Spread (¢)")
+
+    plt.tight_layout()
+    fname = os.path.join(PLOTS_DIR, "midprice_all.png")
+    plt.savefig(fname, dpi=150, bbox_inches="tight")
+    plt.close()
+    _log(f"Saved: {fname}", force=True)
 
 def plot_event_breakdown(df, ticker):
     """
@@ -1132,8 +1187,12 @@ def plot_residual_qqplot(T, mu, alpha, beta, ticker, quiet=False):
     quantiles_th  = -np.log(1 - np.linspace(0.01, 0.99, len(residuals)))
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
-    ks_label = f"  (KS = {ks_stat:.3f})" if np.isfinite(ks_stat) else ""
-    fig.suptitle(f"{ticker} — Hawkes Goodness-of-Fit{ks_label}", fontweight="bold")
+    ks_label = (
+        f"  (KS = {ks_stat:.3f}, p = {ks_pval:.3g})"
+        if np.isfinite(ks_stat) and np.isfinite(ks_pval)
+        else ""
+    )
+    fig.suptitle(f"{ticker} -- Hawkes Goodness-of-Fit{ks_label}", fontweight="bold")
 
     ax1.plot(quantiles_th, quantiles_emp, ".", alpha=0.4,
              color=COLORS.get(ticker, "steelblue"), ms=3)
@@ -1302,6 +1361,7 @@ def run_pipeline(tickers=None, start=START_DATE, end=END_DATE, data_path=DATA_PA
     if len(summaries) > 1:
         _log("\n[bold cyan]Cross-stock comparison[/bold cyan]" if HAVE_RICH else "\nCross-stock comparison", force=True)
         plot_cross_stock_summary(summaries)
+        plot_midprice_all(summaries)
 
     if hawkes_params:
         tks = list(hawkes_params.keys())
