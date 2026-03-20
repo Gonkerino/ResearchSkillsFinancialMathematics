@@ -1,0 +1,13 @@
+# Core numerical / scientific stack
+numpy
+scipy
+pandas
+matplotlib
+statsmodels
+
+# Acceleration / optimization / parallel helpers
+numba
+joblib
+
+# Rich terminal output used by the analysis scripts
+rich
