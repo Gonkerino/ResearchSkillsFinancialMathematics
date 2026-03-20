@@ -2,6 +2,8 @@
 
 MSc mini-project fitting Hawkes process models to LOBSTER market-microstructure data.
 
+Based on the original code by [@konqr](https://github.com/konqr/UoE_LOBHawkes), as part of the LOB Hawkes presentation.
+
 ---
 
 ## Project Structure
@@ -14,6 +16,7 @@ MSc mini-project fitting Hawkes process models to LOBSTER market-microstructure 
 ├── kernel_sum_exp.py         # Sum-of-K-exponentials kernel model selection (K ∈ {1,2,3,5,8})
 ├── main-original.py          # Archived original version of main.py (for reference)
 ├── requirements.txt          # Python dependencies
+├── LOBH-slides.pdf           # Presentation slides from the LOB Hawkes talk
 │
 ├── data/                     # LOBSTER CSV data files
 │   └── data.zip              # Unzip here to populate the data folder
