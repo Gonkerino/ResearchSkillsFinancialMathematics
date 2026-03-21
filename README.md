@@ -99,9 +99,13 @@ KS statistic (lower = better fit) for exponential vs power-law Hawkes across all
 Per-stock AIC, branching ratio, and baseline intensity comparison:
 
 <p>
-  <img src="plots/power_hawkes/exp_vs_power_AMZN.png" width="19%" />
-  <img src="plots/power_hawkes/exp_vs_power_AAPL.png" width="19%" />
-  <img src="plots/power_hawkes/exp_vs_power_GOOG.png" width="19%" />
-  <img src="plots/power_hawkes/exp_vs_power_MSFT.png" width="19%" />
-  <img src="plots/power_hawkes/exp_vs_power_INTC.png" width="19%" />
+  <img src="plots/power_hawkes/exp_vs_power_AMZN.png" width="48%" />
+  <img src="plots/power_hawkes/exp_vs_power_AAPL.png" width="48%" />
+</p>
+<p>
+  <img src="plots/power_hawkes/exp_vs_power_GOOG.png" width="48%" />
+  <img src="plots/power_hawkes/exp_vs_power_MSFT.png" width="48%" />
+</p>
+<p>
+  <img src="plots/power_hawkes/exp_vs_power_INTC.png" width="48%" />
 </p>
