@@ -67,3 +67,41 @@ Run all scripts from the project root. Suggested order:
 | `python experiment_2.py` | Buy vs sell asymmetry — separate Hawkes fits, branching ratio comparison |
 | `python power_hawkes.py` | Power-law kernel fit (Numba-accelerated), AIC vs exponential |
 | `python kernel_sum_exp.py` | Sum-of-exponentials kernel, AIC/BIC model selection across K |
+
+---
+
+## Results
+
+### LOB Market Microstructure
+
+![Cross-stock LOB Summary](plots/main/cross_stock_summary.png)
+
+### Exponential Hawkes Fit — Cross-stock
+
+![Hawkes Parameters Cross-stock Comparison](plots/main/hawkes_comparison.png)
+
+### Experiment 2 — Buy vs Sell Asymmetry
+
+![Buy vs Sell Branching Ratio](plots/experiment_2/exp2_cross_stock_branching.png)
+
+### Experiment 3 — Power-law Kernel
+
+KS statistic (lower = better fit) for exponential vs power-law Hawkes across all stocks. ★ marks the better-fitting model.
+
+| Model | AMZN | AAPL | GOOG | MSFT | INTC |
+|---|---|---|---|---|---|
+| Exp | 0.325 | 0.317 | 0.385 | 0.294 | 0.244 |
+| Power-law | **0.086**★ | **0.072**★ | **0.075**★ | **0.190**★ | **0.173**★ |
+| ΔKS | −0.239 | −0.245 | −0.310 | −0.104 | −0.071 |
+
+![Power-law vs Exponential Cross-ticker Summary](plots/power_hawkes/cross_ticker_summary.png)
+
+Per-stock AIC, branching ratio, and baseline intensity comparison:
+
+<p>
+  <img src="plots/power_hawkes/exp_vs_power_AMZN.png" width="19%" />
+  <img src="plots/power_hawkes/exp_vs_power_AAPL.png" width="19%" />
+  <img src="plots/power_hawkes/exp_vs_power_GOOG.png" width="19%" />
+  <img src="plots/power_hawkes/exp_vs_power_MSFT.png" width="19%" />
+  <img src="plots/power_hawkes/exp_vs_power_INTC.png" width="19%" />
+</p>
