@@ -737,7 +737,7 @@ def _compute_ticker(df, ticker, pool, progress=None, stage_task=None,
     ax1.plot(xs, ys_lognorm,   color="#2ca02c", ls=":",   lw=2.2,
              label=f"Lognormal(s={s_l:.2f}, sc={scale_l:.2f})")
     ax1.plot(xs, ys_exp,       color="#ff7f0e", ls="-",   lw=1.8,
-             label=f"Exponential(lam={1.0/scale_e:.2f})")
+             label=f"Poisson(lam={1.0/scale_e:.2f})")
     ax1.plot(xs, ys_invgauss,  color="#1f77b4", ls="--",  lw=1.6,
              label=f"InvGaussian(shape={mu_ig:.2f}, sc={scale_ig:.2f})")
     ax1.plot(xs, ys_fisk,      color="#8c564b", ls="-.",  lw=1.6,
@@ -799,7 +799,7 @@ def _compute_ticker(df, ticker, pool, progress=None, stage_task=None,
     ax1s.plot(xs, ys_lognorm,   color="#2ca02c", ls=":",   lw=2.2,
               label=f"Lognormal(s={s_l:.2f}, sc={scale_l:.2f})")
     ax1s.plot(xs, ys_exp,       color="#ff7f0e", ls="-",   lw=1.8,
-              label=f"Exponential(lam={1.0/scale_e:.2f})")
+              label=f"Poisson(lam={1.0/scale_e:.2f})")
     ax1s.plot(xs, ys_invgauss,  color="#1f77b4", ls="--",  lw=1.6,
               label=f"InvGaussian(shape={mu_ig:.2f}, sc={scale_ig:.2f})")
     ax1s.plot(xs, ys_fisk,      color="#8c564b", ls="-.",  lw=1.6,
@@ -878,7 +878,7 @@ def _compute_ticker(df, ticker, pool, progress=None, stage_task=None,
         "Weibull":       2 * 2 - 2 * ll_weibull,
         "Gamma":         2 * 2 - 2 * ll_gamma,
         "Lognormal":     2 * 2 - 2 * ll_lognorm,
-        "Exponential":   2 * 1 - 2 * ll_exp,
+        "Poisson":       2 * 1 - 2 * ll_exp,
         "InvGaussian":   2 * 2 - 2 * ll_invgauss,
         "LogLogistic":   2 * 2 - 2 * ll_fisk,
         "Burr12":        2 * 3 - 2 * ll_burr12,
@@ -922,7 +922,7 @@ def plot_aic_comparison(results):
     if not results:
         return
 
-    dist_names = ["Weibull", "Gamma", "Lognormal", "Exponential",
+    dist_names = ["Weibull", "Gamma", "Lognormal", "Poisson",
                   "InvGaussian", "LogLogistic", "Burr12", "GenPareto",
                   "GenGamma", "Lomax", "MittagLeffler"]
     tickers = list(results.keys())
@@ -991,7 +991,7 @@ def plot_aic_comparison(results):
     x       = np.arange(n_t)
     dcolors = {
         "Weibull":       "#d62728", "Gamma":       "#9467bd",
-        "Lognormal":     "#2ca02c", "Exponential": "#ff7f0e",
+        "Lognormal":     "#2ca02c", "Poisson":     "#ff7f0e",
         "InvGaussian":   "#1f77b4", "LogLogistic": "#8c564b",
         "Burr12":        "#e377c2", "GenPareto":   "#7f7f7f",
         "GenGamma":      "#bcbd22", "Lomax":       "#17becf",
@@ -1050,12 +1050,12 @@ def plot_aic_raw_and_normalised(results):
     if not results:
         return
 
-    dist_names = ["Weibull", "Gamma", "Lognormal", "Exponential",
+    dist_names = ["Weibull", "Gamma", "Lognormal", "Poisson",
                   "InvGaussian", "LogLogistic", "Burr12", "GenPareto",
                   "GenGamma", "Lomax", "MittagLeffler"]
     dcolors = {
         "Weibull":       "#d62728", "Gamma":       "#9467bd",
-        "Lognormal":     "#2ca02c", "Exponential": "#ff7f0e",
+        "Lognormal":     "#2ca02c", "Poisson":     "#ff7f0e",
         "InvGaussian":   "#1f77b4", "LogLogistic": "#8c564b",
         "Burr12":        "#e377c2", "GenPareto":   "#7f7f7f",
         "GenGamma":      "#bcbd22", "Lomax":       "#17becf",
@@ -1228,7 +1228,7 @@ def plot_cross_ticker_stylised_comparison(results):
 
         ax.loglog(xs_emp, ys_emp, lw=2.0, color=color, alpha=0.9, label="Empirical")
         ax.loglog(xw, expon.sf(xw, loc=0, scale=res["exp_scale"]),
-                  ls=":", lw=1.6, color="orange", alpha=0.85, label="Exponential")
+                  ls=":", lw=1.6, color="orange", alpha=0.85, label="Poisson")
         ax.loglog(xw, lognorm.sf(xw, s=res["lognorm_s"], loc=0,
                                  scale=res["lognorm_scale"]),
                   ls="--", lw=1.6, color="green", alpha=0.85, label="Lognormal")
