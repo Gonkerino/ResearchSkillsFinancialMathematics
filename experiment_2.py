@@ -134,14 +134,14 @@ def compute_residuals(T, mu, alpha, beta):
     """Return Lambda-transformed inter-arrivals; should be ~Exp(1) if fit is good."""
     T = np.sort(np.asarray(T, dtype=float))
     n = len(T)
-    A, Lambda = 0.0, np.zeros(n)
-    for i in range(n):
-        if i > 0:
-            dt = T[i] - T[i - 1]
-            A = A * np.exp(-beta * dt)
-            Lambda[i] = Lambda[i - 1] + mu * dt + (alpha / beta) * (1 - np.exp(-beta * dt)) * A
-        A += 1.0
-    return np.diff(Lambda)
+    residuals = np.empty(n - 1)
+    A = 0.0
+    for i in range(1, n):
+        dt = T[i] - T[i - 1]
+        e  = np.exp(-beta * dt)
+        residuals[i - 1] = mu * dt + (alpha / beta) * (1 - e) * (1.0 + A)
+        A = e * (A + 1.0)
+    return residuals
 
 
 # =============================================================================
